@@ -6,7 +6,6 @@ import android.app.Instrumentation
 import android.content.Context
 import android.os.Bundle
 import android.os.ServiceManager
-import android.system.Os
 import android.telephony.TelephonyFrameworkInitializer
 import android.util.Log
 import com.android.internal.telephony.ITelephony
@@ -38,8 +37,7 @@ class ImsStatusReader : Instrumentation() {
         val am = IActivityManager.Stub.asInterface(ShizukuBinderWrapper(binder))
         var delegated = false
         try {
-            am.startDelegateShellPermissionIdentity(Os.getuid(), null)
-            delegated = true
+            delegated = am.tryStartShellPermissionDelegation(TAG)
             val subId = arguments.getInt(BUNDLE_SELECT_SIM_ID, -1)
             if (subId < 0) {
                 result.putBoolean(BUNDLE_RESULT, false)
@@ -63,8 +61,7 @@ class ImsStatusReader : Instrumentation() {
             result.putString(BUNDLE_RESULT_MSG, t.message ?: t.javaClass.simpleName)
         } finally {
             if (delegated) {
-                runCatching { am.stopDelegateShellPermissionIdentity() }
-                    .onFailure { Log.w(TAG, "stop delegate shell identity failed", it) }
+                am.tryStopShellPermissionDelegation(TAG)
             }
         }
 

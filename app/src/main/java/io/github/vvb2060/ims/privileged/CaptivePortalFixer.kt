@@ -7,7 +7,6 @@ import android.content.Context
 import android.os.Bundle
 import android.os.ServiceManager
 import android.provider.Settings
-import android.system.Os
 import android.util.Log
 import rikka.shizuku.ShizukuBinderWrapper
 
@@ -49,8 +48,7 @@ class CaptivePortalFixer : Instrumentation() {
         val am = IActivityManager.Stub.asInterface(ShizukuBinderWrapper(binder))
         var delegated = false
         try {
-            am.startDelegateShellPermissionIdentity(Os.getuid(), null)
-            delegated = true
+            delegated = am.tryStartShellPermissionDelegation(TAG)
             val resolver = context.contentResolver
             val action = arguments?.getString(BUNDLE_ACTION)?.takeIf { it.isNotBlank() } ?: ACTION_APPLY_CN
             when (action) {
@@ -116,8 +114,7 @@ class CaptivePortalFixer : Instrumentation() {
             result.putString(BUNDLE_RESULT_MSG, t.message ?: t.javaClass.simpleName)
         } finally {
             if (delegated) {
-                runCatching { am.stopDelegateShellPermissionIdentity() }
-                    .onFailure { Log.w(TAG, "stop delegate shell identity failed", it) }
+                am.tryStopShellPermissionDelegation(TAG)
             }
         }
         finish(Activity.RESULT_OK, result)

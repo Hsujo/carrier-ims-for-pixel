@@ -8,7 +8,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
 import android.os.ServiceManager
-import android.system.Os
 import android.telephony.CarrierConfigManager
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
@@ -40,6 +39,12 @@ class ImsModifier : Instrumentation() {
         const val BUNDLE_PREFER_PERSISTENT = "prefer_persistent"
         const val BUNDLE_RESULT = "result"
         const val BUNDLE_RESULT_MSG = "result_msg"
+
+        /**
+         * 主操作成功、但 shell 权限委托清理失败时携带的警告原因。
+         * 出现该键时 [BUNDLE_RESULT] 仍为 true，调用方不得据此判定失败。
+         */
+        const val BUNDLE_RESULT_WARNING = "result_warning"
 
         fun buildResetBundle(): Bundle = Bundle().apply {
             putBoolean(BUNDLE_RESET, true)
@@ -220,11 +225,19 @@ class ImsModifier : Instrumentation() {
         Log.i(TAG, "shizuku binder is ready")
 
         try {
-            overrideConfig(arguments)
+            val cleanupWarning = overrideConfig(arguments)
             if (LogcatRepository.isCapturing()) {
                 Log.i(TAG, "overrideConfig success")
             }
             results.putBoolean(BUNDLE_RESULT, true)
+            // 主操作已成功。权限委托清理失败只作为警告上报，绝不能翻转成失败。
+            if (cleanupWarning != null) {
+                Log.w(TAG, "overrideConfig succeeded with cleanup compatibility warning")
+                results.putString(
+                    BUNDLE_RESULT_WARNING,
+                    cleanupWarning.message ?: cleanupWarning.javaClass.simpleName
+                )
+            }
         } catch (t: Throwable) {
             if (LogcatRepository.isCapturing()) {
                 Log.i(TAG, "overrideConfig failed")
@@ -236,12 +249,27 @@ class ImsModifier : Instrumentation() {
         finish(Activity.RESULT_OK, results)
     }
 
+    /**
+     * 执行 CarrierConfig 写入。
+     *
+     * @return 主操作成功、但权限委托清理失败时返回该失败原因；全部成功返回 null。
+     *         主操作失败时抛出异常。
+     */
     @Throws(Exception::class)
-    private fun overrideConfig(arguments: Bundle) {
+    private fun overrideConfig(arguments: Bundle): Throwable? {
         val binder = ServiceManager.getService(Context.ACTIVITY_SERVICE)
         val am = IActivityManager.Stub.asInterface(ShizukuBinderWrapper(binder))
         Log.i(TAG, "starting shell permission delegation")
-        am.startDelegateShellPermissionIdentity(Os.getuid(), null)
+        var startFailure: Throwable? = null
+        // 委托是特权写入的前置条件：开启失败就直接判定主操作失败，
+        // 而不是继续执行并收到一个更难解释的 SecurityException。
+        if (!am.tryStartShellPermissionDelegation(TAG) { startFailure = it }) {
+            throw IllegalStateException(
+                "failed to start shell permission delegation: " +
+                    (startFailure?.message ?: startFailure?.javaClass?.simpleName ?: "unknown"),
+                startFailure
+            )
+        }
         try {
             val cm = context.getSystemService(CarrierConfigManager::class.java)
             val sm = context.getSystemService(SubscriptionManager::class.java)
@@ -280,10 +308,15 @@ class ImsModifier : Instrumentation() {
                     applyCarrierTestMccOverride(subId, countryMccOverride, countryMncHint)
                 }
             }
-        } finally {
-            am.stopDelegateShellPermissionIdentity()
-            Log.i(TAG, "stopped shell permission delegation")
+        } catch (t: Throwable) {
+            // 主操作失败：先尽力清理，再把原始失败原因抛给调用方。
+            // 清理结果在这条路径上不重要，绝不能遮蔽真正的失败。
+            am.tryStopShellPermissionDelegation(TAG)
+            throw t
         }
+        // 主操作已成功。清理失败只作为返回值上报，不抛出，
+        // 避免 finally 中的 NoSuchMethodError 覆盖掉一次成功的写入。
+        return am.tryStopShellPermissionDelegation(TAG)
     }
 
     @Throws(Exception::class)
