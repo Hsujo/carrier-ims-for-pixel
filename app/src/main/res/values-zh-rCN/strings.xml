@@ -277,6 +277,7 @@
     <string name="config_success_message">配置已应用！</string>
     <string name="config_success_reset_message">配置已重置！</string>
     <string name="config_failed">配置失败：%s</string>
+    <string name="config_applied_with_warning">已成功应用；清理兼容性警告：%s</string>
     <string name="load_config_history_success">已加载保存的配置历史</string>
     <string name="load_config_default_success">已加载默认配置</string>
     <string name="load_config_current_success">已加载系统当前配置</string>

@@ -17,6 +17,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.vvb2060.ims.BuildConfig
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.ShizukuProvider
+import io.github.vvb2060.ims.model.CarrierIsoRules
 import io.github.vvb2060.ims.model.Feature
 import io.github.vvb2060.ims.model.FeatureConfigMapper
 import io.github.vvb2060.ims.model.FeatureValue
@@ -105,6 +106,40 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val backendErrorMessage: String?,
     )
 
+    enum class ApplyStatus {
+        /** 写入成功且清理正常。 */
+        APPLIED,
+
+        /**
+         * 写入已生效，但 shell 权限委托清理失败（Android 17 兼容性问题）。
+         * 调用方必须按成功处理，不得回滚 UI。
+         */
+        APPLIED_WITH_CLEANUP_WARNING,
+
+        /** 写入确实失败。 */
+        FAILED,
+    }
+
+    /**
+     * 一次配置写入的结果。
+     *
+     * @param readback 写入后重新读回的真实 CarrierConfig，UI 应以它为准刷新状态；
+     *        读取失败时为 null。
+     */
+    data class ApplyResult(
+        val status: ApplyStatus,
+        val message: String?,
+        val readback: Map<Feature, FeatureValue>?,
+    ) {
+        val isSuccess: Boolean get() = status != ApplyStatus.FAILED
+
+        /** 仅在确实失败时返回错误信息，成功带警告时为 null。 */
+        val errorMessage: String? get() = if (status == ApplyStatus.FAILED) message else null
+
+        val cleanupWarning: String?
+            get() = if (status == ApplyStatus.APPLIED_WITH_CLEANUP_WARNING) message else null
+    }
+
     enum class CaptivePortalFixMode {
         NEED_FIX,
         CAN_RESTORE,
@@ -135,13 +170,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             (flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
     }
 
-    private fun normalizeMcc(raw: String): String {
-        return raw.filter { it.isDigit() }.take(3)
-    }
+    private fun normalizeMcc(raw: String): String = CarrierIsoRules.normalizeMcc(raw)
 
-    private fun normalizeIso(raw: String): String {
-        return raw.trim().lowercase(Locale.US).filter { it.isLetterOrDigit() }.take(8)
-    }
+    private fun normalizeIso(raw: String): String = CarrierIsoRules.normalizeIso(raw)
 
     private fun nowShortTime(): String {
         return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -153,24 +184,8 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         return normalizeMcc(selectedSim.mcc) == "460"
     }
 
-    private fun resolveIsoByMcc(mccRaw: String, fallbackIsoRaw: String): String? {
-        val mcc = normalizeMcc(mccRaw)
-        val fallbackIso = normalizeIso(fallbackIsoRaw)
-        if (mcc.isBlank()) return fallbackIso.ifBlank { null }
-        val mccInt = mcc.toIntOrNull()
-        val iso = when {
-            mcc == "460" -> "cn"
-            mcc == "454" -> "hk"
-            mcc == "466" -> "tw"
-            mccInt != null && mccInt in 310..316 -> "us"
-            mccInt != null && mccInt in 440..441 -> "jp"
-            mccInt != null && mccInt in 234..235 -> "gb"
-            mcc == "450" -> "kr"
-            mcc == "525" -> "sg"
-            else -> fallbackIso
-        }
-        return iso.ifBlank { null }
-    }
+    private fun resolveIsoByMcc(mccRaw: String, fallbackIsoRaw: String): String? =
+        CarrierIsoRules.resolveIsoByMcc(mccRaw, fallbackIsoRaw)
 
     private fun loadOrCreateTikTokRandomIso(subId: Int): String {
         val prefs = application.getSharedPreferences("sim_config_$subId", Context.MODE_PRIVATE)
@@ -393,7 +408,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         selectedSim: SimSelection,
         map: Map<Feature, FeatureValue>,
         countryMccOverride: String? = null,
-    ): String? {
+    ): ApplyResult {
         // 构建传递给底层 ImsModifier 的配置 Bundle
         val carrierName: String? = null
         val enableTikTokFix = (map[Feature.TIKTOK_NETWORK_FIX]?.data ?: false) as Boolean
@@ -438,12 +453,81 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
 
         // 调用 Shizuku 服务进行实际修改
-        val resultMsg = ShizukuProvider.overrideImsConfig(application, bundle)
-        if (resultMsg == null) {
-            // 仅在应用成功后保存配置，避免本地状态与系统状态不一致
-            saveConfiguration(selectedSim.subId, map, countryMccOverride)
+        val overrideResult = ShizukuProvider.overrideImsConfig(application, bundle)
+
+        // 无论 instrumentation 报成功还是失败，都重新读回真实 CarrierConfig。
+        // 读回结果既用于刷新 UI，也用于在 Android 17 上纠正误判：
+        // 权限委托清理失败会让一次已经成功的写入被报成失败。
+        val readback = loadCurrentConfiguration(selectedSim.subId)
+
+        val status = when {
+            overrideResult.isSuccess && overrideResult.cleanupWarning != null ->
+                ApplyStatus.APPLIED_WITH_CLEANUP_WARNING
+
+            overrideResult.isSuccess -> ApplyStatus.APPLIED
+
+            // instrumentation 报失败，但真实配置已体现目标值：以系统事实为准。
+            readback != null && readbackConfirms(readback, map, countryISO) -> {
+                Log.w(
+                    TAG,
+                    "apply reported failure but readback confirms the write for " +
+                        "subId=${selectedSim.subId}, msg=${overrideResult.errorMessage}"
+                )
+                ApplyStatus.APPLIED_WITH_CLEANUP_WARNING
+            }
+
+            else -> ApplyStatus.FAILED
         }
-        return resultMsg
+
+        if (status != ApplyStatus.FAILED) {
+            // 落盘的是读回的系统事实，而不是请求值，避免本地状态与系统状态分叉。
+            saveConfiguration(selectedSim.subId, readback ?: map, countryMccOverride)
+        }
+
+        return ApplyResult(
+            status = status,
+            message = when (status) {
+                ApplyStatus.FAILED -> overrideResult.errorMessage ?: "unknown error"
+                ApplyStatus.APPLIED_WITH_CLEANUP_WARNING ->
+                    overrideResult.cleanupWarning ?: overrideResult.errorMessage
+
+                ApplyStatus.APPLIED -> null
+            },
+            readback = readback,
+        )
+    }
+
+    /**
+     * 判断读回的 CarrierConfig 是否已经体现了本次写入的目标值。
+     *
+     * 只校验**确定会被写入**的项：
+     * [ImsModifier.buildBundle] 对布尔功能仅在启用时写 true，关闭时是移除该 override
+     * 让运营商默认值生效，因此关闭态无法通过读回验证，必须跳过，
+     * 否则会把正常的关闭操作误判成失败。
+     */
+    private fun readbackConfirms(
+        readback: Map<Feature, FeatureValue>,
+        requested: Map<Feature, FeatureValue>,
+        resolvedCountryIso: String?,
+    ): Boolean {
+        var verifiable = 0
+        for ((feature, target) in requested) {
+            // 运营商名称当前不参与写入。
+            if (feature == Feature.CARRIER_NAME) continue
+            // ISO 与 TikTok 修复由 resolvedCountryIso 统一校验。
+            if (feature == Feature.COUNTRY_ISO || feature == Feature.TIKTOK_NETWORK_FIX) continue
+            val enabled = target.data as? Boolean ?: continue
+            if (!enabled) continue
+            verifiable++
+            if ((readback[feature]?.data as? Boolean) != true) return false
+        }
+        if (!resolvedCountryIso.isNullOrBlank()) {
+            verifiable++
+            val actualIso = (readback[Feature.COUNTRY_ISO]?.data as? String).orEmpty()
+            if (!actualIso.equals(resolvedCountryIso, ignoreCase = true)) return false
+        }
+        // 没有任何可校验项时不能凭空判定成功。
+        return verifiable > 0
     }
 
     /**
@@ -1029,8 +1113,8 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val bundle = ImsModifier.buildResetBundle()
         bundle.putInt(ImsModifier.BUNDLE_SELECT_SIM_ID, selectedSim.subId)
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
-        val resultMsg = ShizukuProvider.overrideImsConfig(application, bundle)
-        if (resultMsg == null) {
+        val result = ShizukuProvider.overrideImsConfig(application, bundle)
+        if (result.isSuccess) {
             application.getSharedPreferences(
                 "sim_config_${selectedSim.subId}",
                 Context.MODE_PRIVATE
@@ -1038,10 +1122,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 remove(COUNTRY_MCC_PREF_KEY)
                 remove(TIKTOK_RANDOM_ISO_PREF_KEY)
             }
+            result.cleanupWarning?.let {
+                Log.w(TAG, "reset applied with cleanup compatibility warning: $it")
+            }
             toast(application.getString(R.string.config_success_reset_message))
             return true
         }
-        toast(application.getString(R.string.config_failed, resultMsg), false)
+        toast(application.getString(R.string.config_failed, result.errorMessage), false)
         return false
     }
 
@@ -1349,6 +1436,16 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     private suspend fun maybeRestoreSavedConfigurationAfterBoot() {
+        // 侧载开发版与官方版操作同一套系统 CarrierConfig。若两者都在启动时静默恢复
+        // 各自保存的旧值，就会互相覆盖，并且会写到用户并未选中的另一张 SIM 上。
+        // 因此开发版只接受用户显式点击触发的写入。
+        if (BuildConfig.SIDE_BY_SIDE_DEV_BUILD) {
+            if (pendingConfigRestoreAfterBoot) {
+                Log.i(TAG, "side-by-side dev build: skipping automatic config restore after boot")
+                pendingConfigRestoreAfterBoot = false
+            }
+            return
+        }
         if (!pendingConfigRestoreAfterBoot || restoringConfigAfterBoot) return
         restoringConfigAfterBoot = true
         try {
@@ -1373,18 +1470,18 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         for (sim in simList) {
             val saved = loadConfiguration(sim.subId) ?: continue
             attempted++
-            val resultMsg = onApplyConfiguration(
+            val result = onApplyConfiguration(
                 sim,
                 saved,
                 countryMccOverride = loadSavedCountryMccOverride(sim.subId)
             )
-            if (resultMsg == null) {
+            if (result.isSuccess) {
                 success++
             } else {
                 failed++
                 Log.w(
                     TAG,
-                    "auto restore saved config failed for subId=${sim.subId}, msg=$resultMsg"
+                    "auto restore saved config failed for subId=${sim.subId}, msg=${result.errorMessage}"
                 )
             }
         }

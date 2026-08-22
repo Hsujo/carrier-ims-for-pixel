@@ -82,10 +82,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -524,6 +529,19 @@ class MainActivity : BaseActivity() {
         val countryMccDraftBySubId = remember { mutableStateMapOf<Int, String>() }
         val committedCountryMccBySubId = remember { mutableStateMapOf<Int, String>() }
         val countryIsoApplySignalBySubId = remember { mutableStateMapOf<Int, Int>() }
+        // 每次回到前台都重新读取系统真实 CarrierConfig：官方版或其他工具可能在
+        // 本应用不可见期间改动过同一套配置，本地状态不能被当成系统状态。
+        var configRefreshSignal by remember { mutableIntStateOf(0) }
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    configRefreshSignal++
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
         val submitIssueAction: () -> Unit = {
             val issueBody = buildIssueBody(
                 context = context,
@@ -623,7 +641,7 @@ class MainActivity : BaseActivity() {
             }
             pendingAutoSelectSimAfterReady = false
         }
-        LaunchedEffect(selectedSim, shizukuStatus, allSimList) {
+        LaunchedEffect(selectedSim, shizukuStatus, allSimList, configRefreshSignal) {
             val currentSelected = selectedSim ?: return@LaunchedEffect
             committedFeatureSwitches.clear()
             val currentConfig = if (shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0) {
@@ -666,6 +684,15 @@ class MainActivity : BaseActivity() {
             }
         }
 
+        // 写入成功后用重新读回的真实 CarrierConfig 覆盖界面状态。
+        // 本地草稿只在尚未应用时有意义，绝不能盖住刚刚读回的系统事实。
+        val applyReadbackToUi: (Map<Feature, FeatureValue>?) -> Unit = { readback ->
+            if (readback != null) {
+                syncFeatureState(committedFeatureSwitches, readback)
+                syncFeatureState(featureSwitches, readback)
+            }
+        }
+
         val handleFeatureSwitchChange: (SimSelection?, Feature, FeatureValue) -> Unit =
             handleFeatureSwitchChange@{ targetSim, feature, value ->
             when (feature.valueType) {
@@ -698,13 +725,14 @@ class MainActivity : BaseActivity() {
                     scope.launch {
                         applyingConfiguration = true
                         try {
-                            val resultMsg = viewModel.onApplyConfiguration(
+                            val result = viewModel.onApplyConfiguration(
                                 sim,
                                 buildCompleteFeatureMap(committedFeatureSwitches),
                                 countryMccOverride = sim.subId
                                     .takeIf { it >= 0 }
                                     ?.let { countryMccDraftBySubId[it].orEmpty() }
                             )
+                            val resultMsg = result.errorMessage
                             if (resultMsg != null) {
                                 if ((value.data as? Boolean) == true) {
                                     viewModel.appendSwitchFailureLog(
@@ -721,6 +749,17 @@ class MainActivity : BaseActivity() {
                                     context.getString(R.string.config_failed, resultMsg),
                                     Toast.LENGTH_LONG
                                 ).show()
+                            } else {
+                                // 写入成功：以读回的系统事实刷新 UI，而不是保留乐观值。
+                                // 这样即使其他功能被同一次写入连带改变，界面也不会与系统分叉。
+                                applyReadbackToUi(result.readback)
+                                result.cleanupWarning?.let {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.config_applied_with_warning, it),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                         } finally {
                             applyingConfiguration = false
@@ -812,14 +851,16 @@ class MainActivity : BaseActivity() {
             scope.launch {
                 applyingConfiguration = true
                 try {
-                    val resultMsg = viewModel.onApplyConfiguration(
+                    val result = viewModel.onApplyConfiguration(
                         sim,
                         buildCompleteFeatureMap(backup.featureValues),
                         countryMccOverride = backup.countryMccOverride,
                     )
+                    val resultMsg = result.errorMessage
                     if (resultMsg == null) {
-                        syncFeatureState(committedFeatureSwitches, backup.featureValues)
-                        syncFeatureState(featureSwitches, backup.featureValues)
+                        // 优先采用读回的系统事实；读不回时才退回备份值。
+                        syncFeatureState(committedFeatureSwitches, result.readback ?: backup.featureValues)
+                        syncFeatureState(featureSwitches, result.readback ?: backup.featureValues)
                         countryMccDraftBySubId[sim.subId] = backup.countryMccOverride
                         committedCountryMccBySubId[sim.subId] = backup.countryMccOverride
                         countryIsoApplySignalBySubId[sim.subId] =
@@ -1018,11 +1059,12 @@ class MainActivity : BaseActivity() {
                                         R.string.ims_register_apply_then_register,
                                         Toast.LENGTH_SHORT
                                     ).show()
-                                        val applyResultMsg = viewModel.onApplyConfiguration(
-                                            sim,
-                                            buildCompleteFeatureMap(committedFeatureSwitches),
-                                            countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
-                                        )
+                                    val applyResult = viewModel.onApplyConfiguration(
+                                        sim,
+                                        buildCompleteFeatureMap(committedFeatureSwitches),
+                                        countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
+                                    )
+                                    val applyResultMsg = applyResult.errorMessage
                                     if (applyResultMsg != null) {
                                         viewModel.appendSwitchFailureLog(
                                             action = "IMS_REGISTER",
@@ -1041,6 +1083,7 @@ class MainActivity : BaseActivity() {
                                         ).show()
                                         return@launch
                                     }
+                                    applyReadbackToUi(applyResult.readback)
                                     val registerResult = viewModel.registerIms(sim.subId)
                                     imsRegistrationStatusMap[subId] = registerResult.registered
                                     if (registerResult.backendErrorMessage != null) {
@@ -1093,15 +1136,25 @@ class MainActivity : BaseActivity() {
                                 }
                                 applyingConfiguration = true
                                 try {
-                                        val resultMsg = viewModel.onApplyConfiguration(
-                                            sim,
-                                            mapToApply,
-                                            countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
-                                        )
+                                    val result = viewModel.onApplyConfiguration(
+                                        sim,
+                                        mapToApply,
+                                        countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
+                                    )
+                                    val resultMsg = result.errorMessage
                                     if (resultMsg == null) {
-                                        syncFeatureState(committedFeatureSwitches, mapToApply)
+                                        // 以读回的系统事实为准，而不是刚提交的请求值。
+                                        syncFeatureState(committedFeatureSwitches, result.readback ?: mapToApply)
+                                        result.readback?.let { syncFeatureState(featureSwitches, it) }
                                         countryIsoApplySignalBySubId[sim.subId] =
                                             (countryIsoApplySignalBySubId[sim.subId] ?: 0) + 1
+                                        result.cleanupWarning?.let {
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(R.string.config_applied_with_warning, it),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
                                     } else {
                                         Toast.makeText(
                                             context,

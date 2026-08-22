@@ -50,7 +50,21 @@ class ShizukuProvider : ShizukuProvider() {
             val isOverridden: Boolean,
         )
 
-        suspend fun overrideImsConfig(context: Context, data: Bundle): String? {
+        /**
+         * CarrierConfig 写入结果。
+         *
+         * @param errorMessage 非 null 表示写入失败。
+         * @param cleanupWarning 写入成功、但 shell 权限委托清理失败时的原因。
+         *        仅供提示，不代表写入失败。
+         */
+        data class OverrideResult(
+            val errorMessage: String?,
+            val cleanupWarning: String? = null,
+        ) {
+            val isSuccess: Boolean get() = errorMessage == null
+        }
+
+        suspend fun overrideImsConfig(context: Context, data: Bundle): OverrideResult {
             val primaryArgs = Bundle(data)
             val result = startInstrumentation(context, ImsModifier::class.java, primaryArgs, true)
             if (result == null) {
@@ -58,7 +72,11 @@ class ShizukuProvider : ShizukuProvider() {
                 return tryOverrideWithBroker(context, data, "failed with empty result")
             }
             if (result.getBoolean(ImsModifier.BUNDLE_RESULT)) {
-                return null
+                val warning = result.getString(ImsModifier.BUNDLE_RESULT_WARNING)
+                if (warning != null) {
+                    Log.w(TAG, "overrideImsConfig: applied with cleanup warning: $warning")
+                }
+                return OverrideResult(errorMessage = null, cleanupWarning = warning)
             }
             val msg = result.getString(ImsModifier.BUNDLE_RESULT_MSG) ?: "unknown error"
             // Retry via broker when persistent override is restricted or result is empty.
@@ -173,7 +191,7 @@ class ShizukuProvider : ShizukuProvider() {
                 putBoolean(key, value)
                 putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
             }
-            return overrideImsConfig(context, bundle)
+            return overrideImsConfig(context, bundle).errorMessage
         }
 
         suspend fun queryCaptivePortalConfig(context: Context): CaptivePortalConfig? {
@@ -309,21 +327,26 @@ class ShizukuProvider : ShizukuProvider() {
             context: Context,
             data: Bundle,
             msg: String,
-        ): String? {
+        ): OverrideResult {
             if (!shouldRetryWithBroker(msg)) {
-                return msg
+                return OverrideResult(errorMessage = msg)
             }
             val brokerArgs = Bundle(data)
             val brokerResult =
                 startInstrumentation(context, BrokerInstrumentation::class.java, brokerArgs, true)
             if (brokerResult == null) {
                 Log.w(TAG, "overrideImsConfig: broker failed with empty result")
-                return msg
+                return OverrideResult(errorMessage = msg)
             }
             if (brokerResult.getBoolean(ImsModifier.BUNDLE_RESULT)) {
-                return null
+                return OverrideResult(
+                    errorMessage = null,
+                    cleanupWarning = brokerResult.getString(ImsModifier.BUNDLE_RESULT_WARNING)
+                )
             }
-            return brokerResult.getString(ImsModifier.BUNDLE_RESULT_MSG) ?: msg
+            return OverrideResult(
+                errorMessage = brokerResult.getString(ImsModifier.BUNDLE_RESULT_MSG) ?: msg
+            )
         }
 
         private fun shouldRetryWithBroker(message: String): Boolean {

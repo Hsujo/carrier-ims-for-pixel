@@ -277,6 +277,7 @@
     <string name="config_success_message">Configuration applied!</string>
     <string name="config_success_reset_message">Configuration reset!</string>
     <string name="config_failed">Configuration failed: %s</string>
+    <string name="config_applied_with_warning">Applied successfully; cleanup compatibility warning: %s</string>
     <string name="load_config_history_success">Loaded saved configuration history</string>
     <string name="load_config_default_success">Loaded default configuration</string>
     <string name="load_config_current_success">Loaded current system configuration</string>
