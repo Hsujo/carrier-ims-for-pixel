@@ -122,7 +122,7 @@ object SnapshotStore {
         listOf(probe.ipReachability, probe.dnsResolution).forEach { p ->
             appendLine(
                 "${p.label}: target=${p.target} ${p.successes}/${p.attempts} " +
-                    "ok=${p.ok} bound_to_cellular=${p.boundToCellular}"
+                    "ok=${p.ok} bound_to_cellular=${p.boundToCellular} unusable=${p.unusable}"
             )
             p.details.forEach { appendLine("  $it") }
             p.lastError?.let { appendLine("  last_error=$it") }

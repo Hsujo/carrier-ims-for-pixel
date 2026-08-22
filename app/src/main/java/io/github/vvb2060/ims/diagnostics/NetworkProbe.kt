@@ -5,9 +5,12 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -50,6 +53,9 @@ object NetworkProbe {
     private val DNS_TARGETS = listOf("www.baidu.com", "www.qq.com")
     private const val DNS_PORT = 443
 
+    /** 申请蜂窝网络的等待上限。 */
+    private const val REQUEST_NETWORK_TIMEOUT_MILLIS = 8_000
+
     data class LinkSnapshot(
         /** true 表示链路状态根本没读出来（例如缺权限），与「确实没有蜂窝网络」是两回事。 */
         val unreadable: Boolean,
@@ -76,6 +82,11 @@ object NetworkProbe {
         val boundToCellular: Boolean,
         /** 每个目标各自的结果，用于分辨「全都不通」与「个别目标被拦」。 */
         val details: List<String>,
+        /**
+         * true 表示这次探测根本没能成立（例如 socket 绑定被拒），
+         * 结果不构成任何网络结论 —— 那是工具自身的限制。
+         */
+        val unusable: Boolean = false,
     ) {
         val ok: Boolean get() = successes > 0
     }
@@ -92,15 +103,79 @@ object NetworkProbe {
      * 任何一步失败都记录进结果，不抛出，保证快照仍能生成。
      */
     suspend fun run(context: Context): Result = withContext(Dispatchers.IO) {
+        // 链路状态只需要 ACCESS_NETWORK_STATE，枚举即可读到。
         val lookup = findCellularNetwork(context)
-        val cellular = lookup.getOrNull()
         val link = collectLink(context, lookup)
 
-        // 纯 IP 可达性：绕开 DNS，直连大陆公共解析器的 IP。
-        val ipProbe = probeIpReachability(cellular)
-        // 域名解析：与纯 IP 分开，才能区分「IP 通但 DNS 挂了」。
-        val dnsProbe = probeDnsResolution(cellular)
-        Result(link, ipProbe, dnsProbe, buildVerdict(link, ipProbe, dnsProbe))
+        // 但要把 socket 绑上去，必须显式 requestNetwork 让系统授予使用权，
+        // 否则 netd 会以 EPERM 拒绝绑定（枚举得到的 Network 不等于可用）。
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        var callback: ConnectivityManager.NetworkCallback? = null
+        try {
+            val requested = if (cm != null) {
+                val (network, cb) = requestCellularNetwork(cm)
+                callback = cb
+                network
+            } else {
+                null
+            }
+            val cellular = requested ?: lookup.getOrNull()
+            val ipProbe = probeIpReachability(cellular)
+            val dnsProbe = probeDnsResolution(cellular)
+            Result(link, ipProbe, dnsProbe, buildVerdict(link, ipProbe, dnsProbe))
+        } finally {
+            callback?.let { runCatching { cm?.unregisterNetworkCallback(it) } }
+        }
+    }
+
+    /**
+     * 显式申请一个可用的蜂窝网络。
+     *
+     * @return 拿到的网络（超时或不可用时为 null）与需要注销的 callback。
+     */
+    private suspend fun requestCellularNetwork(
+        cm: ConnectivityManager,
+    ): Pair<Network?, ConnectivityManager.NetworkCallback?> {
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        return try {
+            suspendCancellableCoroutine { cont ->
+                val cb = object : ConnectivityManager.NetworkCallback() {
+                    private var settled = false
+                    override fun onAvailable(network: Network) {
+                        if (!settled) {
+                            settled = true
+                            cont.resume(network to this)
+                        }
+                    }
+
+                    override fun onUnavailable() {
+                        if (!settled) {
+                            settled = true
+                            cont.resume(null to this)
+                        }
+                    }
+                }
+                try {
+                    cm.requestNetwork(request, cb, REQUEST_NETWORK_TIMEOUT_MILLIS)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "requestNetwork failed", t)
+                    cont.resume(null to null)
+                }
+                cont.invokeOnCancellation { runCatching { cm.unregisterNetworkCallback(cb) } }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "requestCellularNetwork failed", t)
+            null to null
+        }
+    }
+
+    /** 绑定被拒是工具限制，不能当作网络故障。 */
+    private fun isBindDenied(error: String?): Boolean {
+        if (error == null) return false
+        return error.contains("Binding socket to network") || error.contains("EPERM")
     }
 
     /**
@@ -197,6 +272,8 @@ object NetworkProbe {
             lastError = lastError,
             boundToCellular = network != null,
             details = details,
+            // 一次都没通、且失败全是绑定被拒：探测没成立，不构成网络结论。
+            unusable = successes == 0 && details.isNotEmpty() && details.all { isBindDenied(it) },
         )
     }
 
@@ -237,6 +314,7 @@ object NetworkProbe {
             lastError = lastError,
             boundToCellular = network != null,
             details = details,
+            unusable = successes == 0 && details.isNotEmpty() && details.all { isBindDenied(it) },
         )
     }
 
@@ -263,6 +341,12 @@ object NetworkProbe {
             "LINK_STATE_UNREADABLE: 读不到链路状态（${link.error ?: "unknown"}）；" +
                 "以下探测走的是默认路由，不能作为蜂窝链路证据：" +
                 "ip ${ip.successes}/${ip.attempts}, dns ${dns.successes}/${dns.attempts}"
+
+        // 绑定被拒时，所有探测结果都是无效的，绝不能据此下网络结论。
+        ip.unusable ->
+            "PROBE_BIND_DENIED: 无法把探测 socket 绑定到蜂窝网络（EPERM）。" +
+                "这是本应用的权限/申请方式问题，不是网络故障 —— " +
+                "本次 IP 与域名结果均无效，请勿据此判断链路"
 
         !link.hasCellularNetwork ->
             "NO_CELLULAR_NETWORK: Connectivity 里没有蜂窝网络"

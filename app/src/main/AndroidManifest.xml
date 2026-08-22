@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 诊断页读取蜂窝链路状态（地址/路由/DNS/VALIDATED）所需。普通权限，安装即授予。 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- requestNetwork 所需：只有显式申请蜂窝网络，系统才准许本应用把 socket
+         绑定到它；仅靠枚举 allNetworks 去绑定会被 netd 拒绝（EPERM）。普通权限。 -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
