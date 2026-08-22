@@ -124,6 +124,7 @@ object SnapshotStore {
                 "${p.label}: target=${p.target} ${p.successes}/${p.attempts} " +
                     "ok=${p.ok} bound_to_cellular=${p.boundToCellular}"
             )
+            p.details.forEach { appendLine("  $it") }
             p.lastError?.let { appendLine("  last_error=$it") }
         }
     }

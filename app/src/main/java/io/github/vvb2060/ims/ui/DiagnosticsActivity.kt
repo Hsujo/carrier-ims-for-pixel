@@ -201,6 +201,15 @@ class DiagnosticsActivity : BaseActivity() {
                     link.error?.let {
                         Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
                     }
+                    // 逐目标结果：用来分辨「全都不通」与「个别目标被拦」。
+                    (probe.ipReachability.details + probe.dnsResolution.details).forEach {
+                        Text(
+                            it,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
                 }
                 if (state.refreshingLive) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
