@@ -131,6 +131,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.vvb2060.ims.BuildConfig
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.UpdateApkCleanup
+import io.github.vvb2060.ims.model.CarrierIsoRules
 import io.github.vvb2060.ims.model.Feature
 import io.github.vvb2060.ims.model.NrMode
 import io.github.vvb2060.ims.model.FeatureValue
@@ -264,24 +265,10 @@ private fun isChinaDomesticSim(sim: SimSelection?): Boolean {
 }
 
 private fun displayCountryIso(sim: SimSelection): String {
-    val rawIso = sim.countryIso.trim()
-    if (rawIso.length == 2 && rawIso.all { it.isLetter() }) {
-        return rawIso.lowercase(Locale.US)
-    }
-    val mcc = sim.mcc.filter { it.isDigit() }.take(3)
-    val mccInt = mcc.toIntOrNull()
-    val derivedIso = when {
-        mcc == "460" -> "cn"
-        mcc == "454" -> "hk"
-        mcc == "466" -> "tw"
-        mccInt != null && mccInt in 310..316 -> "us"
-        mccInt != null && mccInt in 440..441 -> "jp"
-        mccInt != null && mccInt in 234..235 -> "gb"
-        mcc == "450" -> "kr"
-        mcc == "525" -> "sg"
-        else -> null
-    }
-    return derivedIso ?: rawIso.ifBlank { "-" }
+    // 复用 CarrierIsoRules 这唯一一套 MCC -> ISO 映射，不再在 UI 层维护第二份。
+    // MCC 优先于 framework 返回的 countryIso：后者可能仍是 TikTok 修复写入的
+    // 数字伪 ISO（如 705），直接展示会让人误以为 SIM 真的属于某个数字国家码。
+    return CarrierIsoRules.resolveIsoByMcc(sim.mcc, sim.countryIso) ?: "-"
 }
 
 private fun toDisplayVersion(rawVersion: String?): String {
