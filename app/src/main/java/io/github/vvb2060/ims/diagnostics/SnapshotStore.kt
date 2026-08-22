@@ -103,6 +103,10 @@ object SnapshotStore {
         appendLine("verdict: ${probe.verdict}")
         appendLine()
         val link = probe.link
+        appendLine("target_sub_id=${probe.targetSubId ?: "UNKNOWN"}")
+        appendLine("probed_sub_id=${probe.probedSubId ?: "UNKNOWN"}")
+        appendLine("sub_id_mismatch=${probe.subIdMismatch}")
+        appendLine("link_sub_id=${link.subId ?: "UNKNOWN"}")
         appendLine("link_state_unreadable=${link.unreadable}")
         appendLine("has_cellular_network=${link.hasCellularNetwork}")
         appendLine("validated=${link.validated ?: "UNKNOWN"}")

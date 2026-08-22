@@ -60,7 +60,7 @@ class DiagnosticsActivity : BaseActivity() {
 
         LaunchedEffect(subId) {
             selectedSim = viewModel.loadSimList().firstOrNull { it.subId == subId }
-            viewModel.refreshLiveStatus()
+            viewModel.refreshLiveStatus(subId)
             viewModel.checkShellAvailability()
         }
 
@@ -88,7 +88,7 @@ class DiagnosticsActivity : BaseActivity() {
                 ShellStatusCard(state.shellAvailable)
                 LiveStatusCard(
                     state = state,
-                    onRefresh = { viewModel.refreshLiveStatus() },
+                    onRefresh = { viewModel.refreshLiveStatus(subId) },
                 )
                 CaptureCard(
                     capturing = state.capturing,
@@ -181,6 +181,13 @@ class DiagnosticsActivity : BaseActivity() {
                 } else {
                     Text(probe.verdict, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     val link = probe.link
+                    KeyValueRow(
+                        "测到的 SIM",
+                        buildString {
+                            append(probe.probedSubId?.let { "subId=$it" } ?: "未知")
+                            if (probe.subIdMismatch) append(" ≠ 目标 subId=${probe.targetSubId}")
+                        }
+                    )
                     KeyValueRow("VALIDATED", link.validated?.toString() ?: "UNKNOWN")
                     KeyValueRow("IPv4", link.ipv4.ifEmpty { listOf("(none)") }.joinToString())
                     KeyValueRow("IPv6", link.ipv6.ifEmpty { listOf("(none)") }.joinToString())

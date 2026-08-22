@@ -98,7 +98,7 @@ object SnapshotCollector {
         var probe: NetworkProbe.Result? = null
         var probeError: String? = null
         try {
-            probe = NetworkProbe.run(context)
+            probe = NetworkProbe.run(context, selectedSim?.subId)
         } catch (t: Throwable) {
             // 探测失败也必须让快照生成，其余证据仍然有价值。
             Log.w(TAG, "network probe failed", t)

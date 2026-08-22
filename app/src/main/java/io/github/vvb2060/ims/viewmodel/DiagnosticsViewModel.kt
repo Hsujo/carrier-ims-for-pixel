@@ -47,11 +47,11 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
     /**
      * 刷新实时链路状态。不做任何写入，纯读取。
      */
-    fun refreshLiveStatus() {
+    fun refreshLiveStatus(targetSubId: Int? = null) {
         if (_uiState.value.refreshingLive) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(refreshingLive = true, liveStatusError = null)
-            val result = runCatching { NetworkProbe.run(getApplication()) }
+            val result = runCatching { NetworkProbe.run(getApplication(), targetSubId) }
             _uiState.value = _uiState.value.copy(
                 refreshingLive = false,
                 liveStatus = result.getOrNull(),

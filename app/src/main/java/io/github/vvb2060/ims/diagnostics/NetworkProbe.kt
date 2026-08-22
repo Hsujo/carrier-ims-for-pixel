@@ -6,8 +6,12 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.TelephonyNetworkSpecifier
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -69,6 +73,8 @@ object NetworkProbe {
         val routes: List<String>,
         val dnsServers: List<String>,
         val capabilities: String?,
+        /** 该链路实际属于哪张 SIM；null 表示读不到（无载波特权时会被系统隐藏）。 */
+        val subId: Int?,
         val error: String?,
     )
 
@@ -96,15 +102,25 @@ object NetworkProbe {
         val ipReachability: ProbeResult,
         val dnsResolution: ProbeResult,
         val verdict: String,
-    )
+        /** 目标 subId 与实际被探测网络的 subId，不一致时结论不属于目标卡。 */
+        val targetSubId: Int?,
+        val probedSubId: Int?,
+    ) {
+        val subIdMismatch: Boolean
+            get() = targetSubId != null && probedSubId != null && targetSubId != probedSubId
+    }
 
     /**
      * 采集蜂窝链路状态并做有限次数的连通性测试。
      * 任何一步失败都记录进结果，不抛出，保证快照仍能生成。
      */
-    suspend fun run(context: Context): Result = withContext(Dispatchers.IO) {
+    /**
+     * @param targetSubId 目标 SIM。双卡时必须指定，否则可能测到另一张卡的链路，
+     *        得出的结论与被诊断的卡无关。
+     */
+    suspend fun run(context: Context, targetSubId: Int? = null): Result = withContext(Dispatchers.IO) {
         // 链路状态只需要 ACCESS_NETWORK_STATE，枚举即可读到。
-        val lookup = findCellularNetwork(context)
+        val lookup = findCellularNetwork(context, targetSubId)
         val link = collectLink(context, lookup)
 
         // 但要把 socket 绑上去，必须显式 requestNetwork 让系统授予使用权，
@@ -113,63 +129,105 @@ object NetworkProbe {
         var callback: ConnectivityManager.NetworkCallback? = null
         try {
             val requested = if (cm != null) {
-                val (network, cb) = requestCellularNetwork(cm)
+                val (network, cb) = requestCellularNetwork(cm, targetSubId)
                 callback = cb
                 network
             } else {
                 null
             }
             val cellular = requested ?: lookup.getOrNull()
-            val ipProbe = probeIpReachability(cellular)
-            val dnsProbe = probeDnsResolution(cellular)
-            Result(link, ipProbe, dnsProbe, buildVerdict(link, ipProbe, dnsProbe))
+            val probedSubId = cellular?.let { subIdOf(cm, it) }
+            // 两类探测互不依赖，并行执行以缩短现场等待时间。
+            val (ipProbe, dnsProbe) = coroutineScope {
+                val ip = async { probeIpReachability(cellular) }
+                val dns = async { probeDnsResolution(cellular) }
+                ip.await() to dns.await()
+            }
+            Result(
+                link = link,
+                ipReachability = ipProbe,
+                dnsResolution = dnsProbe,
+                verdict = buildVerdict(link, ipProbe, dnsProbe, targetSubId, probedSubId),
+                targetSubId = targetSubId,
+                probedSubId = probedSubId,
+            )
         } finally {
             callback?.let { runCatching { cm?.unregisterNetworkCallback(it) } }
         }
     }
 
+    /** 读出某个网络归属的 subId；无载波特权时系统可能隐藏 specifier，返回 null。 */
+    private fun subIdOf(cm: ConnectivityManager?, network: Network): Int? = runCatching {
+        val spec = cm?.getNetworkCapabilities(network)?.networkSpecifier
+        (spec as? TelephonyNetworkSpecifier)?.subscriptionId
+    }.getOrNull()
+
     /**
      * 显式申请一个可用的蜂窝网络。
      *
-     * @return 拿到的网络（超时或不可用时为 null）与需要注销的 callback。
+     * 优先带 TelephonyNetworkSpecifier 精确申请目标卡；系统不满足该请求时
+     * 退回不带 specifier 的请求，此时可能拿到另一张卡，由调用方比对 subId 后提示。
      */
     private suspend fun requestCellularNetwork(
         cm: ConnectivityManager,
+        targetSubId: Int?,
     ): Pair<Network?, ConnectivityManager.NetworkCallback?> {
-        val request = NetworkRequest.Builder()
+        if (targetSubId != null && targetSubId >= 0) {
+            val specific = runCatching {
+                NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .setNetworkSpecifier(
+                        TelephonyNetworkSpecifier.Builder().setSubscriptionId(targetSubId).build()
+                    )
+                    .build()
+            }.getOrNull()
+            if (specific != null) {
+                val result = awaitNetwork(cm, specific)
+                if (result.first != null) return result
+                result.second?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+                Log.i(TAG, "specific request for subId=$targetSubId unavailable, falling back")
+            }
+        }
+        val generic = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        return try {
-            suspendCancellableCoroutine { cont ->
-                val cb = object : ConnectivityManager.NetworkCallback() {
-                    private var settled = false
-                    override fun onAvailable(network: Network) {
-                        if (!settled) {
-                            settled = true
-                            cont.resume(network to this)
-                        }
-                    }
+        return awaitNetwork(cm, generic)
+    }
 
-                    override fun onUnavailable() {
-                        if (!settled) {
-                            settled = true
-                            cont.resume(null to this)
-                        }
+    private suspend fun awaitNetwork(
+        cm: ConnectivityManager,
+        request: NetworkRequest,
+    ): Pair<Network?, ConnectivityManager.NetworkCallback?> = try {
+        suspendCancellableCoroutine { cont ->
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                private var settled = false
+                override fun onAvailable(network: Network) {
+                    if (!settled) {
+                        settled = true
+                        cont.resume(network to this)
                     }
                 }
-                try {
-                    cm.requestNetwork(request, cb, REQUEST_NETWORK_TIMEOUT_MILLIS)
-                } catch (t: Throwable) {
-                    Log.w(TAG, "requestNetwork failed", t)
-                    cont.resume(null to null)
+
+                override fun onUnavailable() {
+                    if (!settled) {
+                        settled = true
+                        cont.resume(null to this)
+                    }
                 }
-                cont.invokeOnCancellation { runCatching { cm.unregisterNetworkCallback(cb) } }
             }
-        } catch (t: Throwable) {
-            Log.w(TAG, "requestCellularNetwork failed", t)
-            null to null
+            try {
+                cm.requestNetwork(request, cb, REQUEST_NETWORK_TIMEOUT_MILLIS)
+            } catch (t: Throwable) {
+                Log.w(TAG, "requestNetwork failed", t)
+                cont.resume(null to null)
+            }
+            cont.invokeOnCancellation { runCatching { cm.unregisterNetworkCallback(cb) } }
         }
+    } catch (t: Throwable) {
+        Log.w(TAG, "awaitNetwork failed", t)
+        null to null
     }
 
     /** 绑定被拒是工具限制，不能当作网络故障。 */
@@ -182,13 +240,18 @@ object NetworkProbe {
      * @return success(network) 找到；success(null) 确实没有蜂窝网络；
      *         failure 表示读不出来（缺权限等），调用方必须与「没有」区别对待。
      */
-    private fun findCellularNetwork(context: Context): kotlin.Result<Network?> = runCatching {
+    private fun findCellularNetwork(
+        context: Context,
+        targetSubId: Int?,
+    ): kotlin.Result<Network?> = runCatching {
         val cm = context.getSystemService(ConnectivityManager::class.java)
             ?: error("ConnectivityManager unavailable")
-        cm.allNetworks.firstOrNull { network ->
+        val cellular = cm.allNetworks.filter { network ->
             cm.getNetworkCapabilities(network)
                 ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
         }
+        // 双卡时优先选目标卡的网络，否则会读到另一张卡的链路。
+        cellular.firstOrNull { subIdOf(cm, it) == targetSubId } ?: cellular.firstOrNull()
     }.onFailure { Log.w(TAG, "findCellularNetwork failed", it) }
 
     private fun collectLink(context: Context, lookup: kotlin.Result<Network?>): LinkSnapshot {
@@ -213,6 +276,7 @@ object NetworkProbe {
                 routes = routes.map { it.toString() },
                 dnsServers = lp?.dnsServers.orEmpty().map { it.hostAddress ?: it.toString() },
                 capabilities = caps?.toString(),
+                subId = (caps?.networkSpecifier as? TelephonyNetworkSpecifier)?.subscriptionId,
                 error = null,
             )
         } catch (t: Throwable) {
@@ -237,6 +301,7 @@ object NetworkProbe {
         routes = emptyList(),
         dnsServers = emptyList(),
         capabilities = null,
+        subId = null,
         error = error,
     )
 
@@ -334,7 +399,14 @@ object NetworkProbe {
         link: LinkSnapshot,
         ip: ProbeResult,
         dns: ProbeResult,
+        targetSubId: Int?,
+        probedSubId: Int?,
     ): String = when {
+        // 测到的不是目标卡时，任何结论都与被诊断的 SIM 无关。
+        targetSubId != null && probedSubId != null && targetSubId != probedSubId ->
+            "WRONG_SIM_PROBED: 实际测到的是 subId=$probedSubId 的网络，" +
+                "而目标是 subId=$targetSubId；本次结果不属于目标卡，请勿据此判断"
+
         // 读不到链路状态时不给任何网络结论：那是工具自身的问题，
         // 报成「没有蜂窝网络」会把排查引向完全错误的方向。
         link.unreadable ->
