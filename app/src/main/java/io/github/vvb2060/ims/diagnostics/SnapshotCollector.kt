@@ -50,6 +50,9 @@ object SnapshotCollector {
     private const val DUMPSYS_MAX_BYTES = 1024 * 1024
     private const val SMALL_MAX_BYTES = 128 * 1024
 
+    /** IMS dump 的服务名各版本不一致，按可能性依次尝试。 */
+    private val IMS_SERVICE_CANDIDATES = listOf("telephony.ims", "ims", "imsbinder")
+
     private val nameFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
     suspend fun collect(
@@ -76,19 +79,43 @@ object SnapshotCollector {
         )
         for ((svc, cap) in dumpsysTargets) {
             onProgress("dumpsys $svc")
-            commands += ShellRunner.exec(listOf("dumpsys", svc), timeoutMillis = 20_000, maxOutputBytes = cap)
+            commands += ShellRunner.exec(context, listOf("dumpsys", svc), timeoutMillis = 20_000, maxOutputBytes = cap)
         }
 
+        // 真机确认该设备上没有名为 "ims" 的服务（Can't find service: ims），
+        // 服务名各版本不一致，因此先列出全部服务再逐个尝试候选名。
         onProgress("dumpsys ims")
-        commands += ShellRunner.exec(listOf("dumpsys", "ims"), timeoutMillis = 20_000, maxOutputBytes = DUMPSYS_MAX_BYTES)
+        commands += ShellRunner.exec(
+            context, listOf("dumpsys", "-l"), maxOutputBytes = SMALL_MAX_BYTES
+        )
+        for (candidate in IMS_SERVICE_CANDIDATES) {
+            val result = ShellRunner.exec(
+                context,
+                listOf("dumpsys", candidate),
+                timeoutMillis = 20_000,
+                maxOutputBytes = DUMPSYS_MAX_BYTES,
+            )
+            commands += result
+            // 命中即止；"Can't find service" 说明这个名字在本版本不存在。
+            if (result.isSuccess && !result.stderr.contains("Can't find service")) break
+        }
 
         onProgress("采集网络接口与路由")
-        commands += ShellRunner.exec(listOf("ip", "addr"), maxOutputBytes = SMALL_MAX_BYTES)
-        commands += ShellRunner.exec(listOf("ip", "route"), maxOutputBytes = SMALL_MAX_BYTES)
-        commands += ShellRunner.exec(listOf("ip", "-6", "route"), maxOutputBytes = SMALL_MAX_BYTES)
+        commands += ShellRunner.exec(context, listOf("ip", "addr"), maxOutputBytes = SMALL_MAX_BYTES)
+        // Android 用策略路由，默认表通常是空的（真机上 ip route 返回空且 exit=0），
+        // 必须查全部路由表才能看到每条 PDN 的默认路由。
+        commands += ShellRunner.exec(
+            context, listOf("ip", "route", "show", "table", "all"), maxOutputBytes = SMALL_MAX_BYTES
+        )
+        commands += ShellRunner.exec(
+            context, listOf("ip", "-6", "route", "show", "table", "all"),
+            maxOutputBytes = SMALL_MAX_BYTES,
+        )
+        commands += ShellRunner.exec(context, listOf("ip", "rule", "show"), maxOutputBytes = SMALL_MAX_BYTES)
 
         onProgress("采集 radio 日志")
         commands += ShellRunner.exec(
+            context,
             listOf("logcat", "-b", "radio", "-d", "-v", "threadtime", "-t", RADIO_LOG_LINES.toString()),
             timeoutMillis = 30_000,
             maxOutputBytes = RADIO_LOG_MAX_BYTES,

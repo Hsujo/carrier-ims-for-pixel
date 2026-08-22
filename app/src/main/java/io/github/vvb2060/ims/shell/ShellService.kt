@@ -1,5 +1,6 @@
 package io.github.vvb2060.ims.shell
 
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.InputStream
 import java.io.OutputStream
@@ -20,17 +21,19 @@ class ShellService : IShellService.Stub {
     @Suppress("UNUSED_PARAMETER")
     constructor(context: android.content.Context)
 
-    override fun exec(
+    override fun execToFd(
         command: Array<out String>?,
+        stdoutFd: ParcelFileDescriptor?,
+        stderrFd: ParcelFileDescriptor?,
         timeoutMillis: Int,
         maxOutputBytes: Int,
-    ): Array<String> {
-        if (command.isNullOrEmpty()) {
-            return arrayOf(EXIT_ERROR, "", "empty command")
-        }
+    ): String {
+        if (command.isNullOrEmpty()) return EXIT_ERROR
         val timeout = timeoutMillis.coerceIn(1_000, MAX_TIMEOUT_MILLIS).toLong()
         val cap = maxOutputBytes.coerceIn(1_024, MAX_OUTPUT_BYTES)
 
+        val out = stdoutFd?.let { ParcelFileDescriptor.AutoCloseOutputStream(it) }
+        val err = stderrFd?.let { ParcelFileDescriptor.AutoCloseOutputStream(it) }
         var process: Process? = null
         return try {
             // 不经 shell 解析，参数按数组传递，避免注入。
@@ -38,28 +41,27 @@ class ShellService : IShellService.Stub {
             val proc = process
             proc.outputStream.closeQuietly()
 
-            // stdout 与 stderr 必须并发读取：任一管道写满都会让子进程阻塞，
+            // stdout 与 stderr 必须并发转发：任一管道写满都会让子进程阻塞，
             // 串行读取会直接死锁。
-            val stdout = StringBuilder()
-            val stderr = StringBuilder()
-            val outThread = thread(name = "shell-stdout") { proc.inputStream.drainInto(stdout, cap) }
-            val errThread = thread(name = "shell-stderr") { proc.errorStream.drainInto(stderr, cap) }
+            val outThread = thread(name = "shell-stdout") { proc.inputStream.pipeTo(out, cap) }
+            val errThread = thread(name = "shell-stderr") { proc.errorStream.pipeTo(err, cap) }
 
             val finished = proc.waitFor(timeout, TimeUnit.MILLISECONDS)
-            if (!finished) {
-                proc.destroyForcibly()
-            }
-            // 读取线程随管道关闭而结束；给一个上限以防万一。
+            if (!finished) proc.destroyForcibly()
             outThread.join(JOIN_TIMEOUT_MILLIS)
             errThread.join(JOIN_TIMEOUT_MILLIS)
 
-            val exit = if (finished) proc.exitValue().toString() else EXIT_TIMEOUT
-            arrayOf(exit, stdout.toString(), stderr.toString())
+            if (finished) proc.exitValue().toString() else EXIT_TIMEOUT
         } catch (t: Throwable) {
             Log.w(TAG, "exec failed: ${command.joinToString(" ")}", t)
-            arrayOf(EXIT_ERROR, "", "${t.javaClass.simpleName}: ${t.message ?: "no message"}")
+            runCatching {
+                err?.write("${t.javaClass.simpleName}: ${t.message ?: "no message"}\n".toByteArray())
+            }
+            EXIT_ERROR
         } finally {
             runCatching { process?.destroy() }
+            out.closeQuietly()
+            err.closeQuietly()
         }
     }
 
@@ -68,38 +70,40 @@ class ShellService : IShellService.Stub {
     }
 
     /**
-     * 读取到上限为止，随后继续排空管道但丢弃内容。
+     * 转发到上限为止，随后继续排空但不再写出。
      *
      * 直接停止读取会让子进程卡在写阻塞上，因此必须读完，
-     * 只是不再累积 —— 这样既有上限，又不会挂住进程。
+     * 只是不再落盘 —— 这样既有上限，又不会挂住进程。
      */
-    private fun InputStream.drainInto(target: StringBuilder, maxBytes: Int) {
+    private fun InputStream.pipeTo(target: OutputStream?, maxBytes: Int) {
         var total = 0
         var truncated = false
         try {
             use { stream ->
-                val buffer = ByteArray(8 * 1024)
+                val buffer = ByteArray(64 * 1024)
                 while (true) {
                     val read = stream.read(buffer)
                     if (read <= 0) break
-                    if (total < maxBytes) {
-                        val take = minOf(read, maxBytes - total)
-                        target.append(String(buffer, 0, take))
-                        total += take
-                        if (total >= maxBytes && !truncated) {
-                            truncated = true
-                            target.append("\n[truncated at $maxBytes bytes]\n")
+                    if (total >= maxBytes) continue
+                    val take = minOf(read, maxBytes - total)
+                    runCatching { target?.write(buffer, 0, take) }
+                    total += take
+                    if (total >= maxBytes && !truncated) {
+                        truncated = true
+                        runCatching {
+                            target?.write("\n[truncated at $maxBytes bytes]\n".toByteArray())
                         }
                     }
                 }
             }
+            runCatching { target?.flush() }
         } catch (t: Throwable) {
-            Log.w(TAG, "stream drain failed", t)
+            Log.w(TAG, "stream pipe failed", t)
         }
     }
 
-    private fun OutputStream.closeQuietly() {
-        runCatching { close() }
+    private fun OutputStream?.closeQuietly() {
+        runCatching { this?.close() }
     }
 
     companion object {
@@ -110,8 +114,8 @@ class ShellService : IShellService.Stub {
         /** 单条命令最长执行时间。 */
         const val MAX_TIMEOUT_MILLIS = 60_000
 
-        /** 单条命令 stdout/stderr 各自的上限，杜绝无上限写入。 */
-        const val MAX_OUTPUT_BYTES = 4 * 1024 * 1024
-        private const val JOIN_TIMEOUT_MILLIS = 3_000L
+        /** 单条命令各流的落盘上限，杜绝无上限写入。 */
+        const val MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+        private const val JOIN_TIMEOUT_MILLIS = 5_000L
     }
 }

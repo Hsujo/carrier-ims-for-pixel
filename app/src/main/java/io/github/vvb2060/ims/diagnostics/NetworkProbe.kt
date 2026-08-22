@@ -75,6 +75,8 @@ object NetworkProbe {
         val capabilities: String?,
         /** 该链路实际属于哪张 SIM；null 表示读不到（无载波特权时会被系统隐藏）。 */
         val subId: Int?,
+        /** 该 PDN 是否带 INTERNET 能力。false 多半是 IMS 专用 PDN，不能当上网链路看。 */
+        val hasInternetCapability: Boolean,
         val error: String?,
     )
 
@@ -250,8 +252,17 @@ object NetworkProbe {
             cm.getNetworkCapabilities(network)
                 ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
         }
-        // 双卡时优先选目标卡的网络，否则会读到另一张卡的链路。
-        cellular.firstOrNull { subIdOf(cm, it) == targetSubId } ?: cellular.firstOrNull()
+        // 一张 SIM 通常同时存在多条 PDN：IMS 专用（只有 IMS/MMTEL 能力、
+        // 常见 IPv6-only 且无 DNS）与上网用（带 INTERNET 能力）。
+        // 诊断「有信号没数据」要看的是后者，取错会把 IMS PDN 的正常状态误读成故障。
+        fun hasInternet(network: Network) = cm.getNetworkCapabilities(network)
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+
+        val matchesTarget = { network: Network -> subIdOf(cm, network) == targetSubId }
+        cellular.firstOrNull { matchesTarget(it) && hasInternet(it) }
+            ?: cellular.firstOrNull { hasInternet(it) }
+            ?: cellular.firstOrNull { matchesTarget(it) }
+            ?: cellular.firstOrNull()
     }.onFailure { Log.w(TAG, "findCellularNetwork failed", it) }
 
     private fun collectLink(context: Context, lookup: kotlin.Result<Network?>): LinkSnapshot {
@@ -277,6 +288,8 @@ object NetworkProbe {
                 dnsServers = lp?.dnsServers.orEmpty().map { it.hostAddress ?: it.toString() },
                 capabilities = caps?.toString(),
                 subId = (caps?.networkSpecifier as? TelephonyNetworkSpecifier)?.subscriptionId,
+                hasInternetCapability =
+                    caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
                 error = null,
             )
         } catch (t: Throwable) {
@@ -302,6 +315,7 @@ object NetworkProbe {
         dnsServers = emptyList(),
         capabilities = null,
         subId = null,
+        hasInternetCapability = false,
         error = error,
     )
 
@@ -422,6 +436,11 @@ object NetworkProbe {
 
         !link.hasCellularNetwork ->
             "NO_CELLULAR_NETWORK: Connectivity 里没有蜂窝网络"
+
+        // IMS 专用 PDN 本来就没有 DNS、常为 IPv6-only，按上网链路去判会得出假故障。
+        !link.hasInternetCapability ->
+            "NO_INTERNET_PDN: 目标 SIM 上只找到不带 INTERNET 能力的 PDN" +
+                "（通常是 IMS 专用通道），未找到用于上网的数据连接"
 
         link.ipv4.isEmpty() && link.ipv6.isEmpty() ->
             "NO_IP_ADDRESS: 蜂窝网络存在但没有 IP 地址"

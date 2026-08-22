@@ -72,7 +72,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
      */
     fun checkShellAvailability() {
         viewModelScope.launch {
-            val result = ShellRunner.exec(listOf("id"), timeoutMillis = 8_000, maxOutputBytes = 4096)
+            val result = ShellRunner.exec(getApplication(), listOf("id"), timeoutMillis = 8_000, maxOutputBytes = 4096)
             _uiState.value = _uiState.value.copy(
                 shellAvailable = result.isSuccess,
                 message = if (result.isSuccess) {

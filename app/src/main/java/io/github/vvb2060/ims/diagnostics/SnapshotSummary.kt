@@ -88,15 +88,32 @@ data class SnapshotSummary(
             ),
         )
 
+        /**
+         * 真机（Pixel Fold / Android 17）的 dumpsys connectivity 实际格式：
+         *
+         *   NetworkAgentInfo{network{109} ni{MOBILE[NR] CONNECTED extra: 3gnet}
+         *     lp{{InterfaceName: rmnet1 LinkAddresses: [...] DnsAddresses: [...] Routes: [...]}}
+         *     nc{[ Transports: CELLULAR Capabilities: SUPL&INTERNET&...&VALIDATED
+         *          Specifier: <TelephonyNetworkSpecifier [mSubId = 2]> ]}}
+         *
+         * 没有 apnName= / nrState= / TRANSPORT_CELLULAR 这些字段，
+         * 早先照 AOSP 常见写法猜的正则全部落空。以下按实际输出重写。
+         */
         private val CONNECTIVITY_PATTERNS = mapOf(
+            // APN 出现在 NetworkInfo 的 extra 里，且只取带 INTERNET 能力的那条 PDN。
             "apn" to listOf(
+                """ni\{MOBILE\[[^\]]*\][^}]*extra:\s*([^\s}]+)[^}]*\}(?=(?:(?!NetworkAgentInfo).)*?INTERNET)""",
+                """ni\{MOBILE\[[^\]]*\][^}]*extra:\s*([^\s}]+)""",
                 """\bapnName=(\S+)""",
-                """\bmApnSetting=.*?apnName=(\S+)""",
-                """\bapn=(\S+)""",
             ),
             "data_network_state" to listOf(
-                """\bDataNetwork\S*\s+state[=:]\s*(\S+)""",
+                """ni\{MOBILE\[[^\]]*\]\s+(\w+)""",
                 """\bmState=(\S+)""",
+            ),
+            // MOBILE[NR] / MOBILE[LTE] 就是当前数据 RAT。
+            "rat_from_connectivity" to listOf(
+                """ni\{MOBILE\[(\w+)\][^}]*\}(?=(?:(?!NetworkAgentInfo).)*?INTERNET)""",
+                """ni\{MOBILE\[(\w+)\]""",
             ),
         )
 
@@ -119,6 +136,13 @@ data class SnapshotSummary(
                 firstMatch(connectivity, patterns)?.let { fields[field] = it }
             }
 
+            // telephony.registry 可能采集失败（输出过大）或格式不识别，
+            // 此时 connectivity 里的 MOBILE[NR] / MOBILE[LTE] 仍能给出数据 RAT。
+            val ratFallback = fields.remove("rat_from_connectivity")
+            if (fields["rat"] == UNKNOWN && !ratFallback.isNullOrBlank() && ratFallback != UNKNOWN) {
+                fields["rat"] = "$ratFallback (from connectivity)"
+            }
+
             // NSA / SA 线索：NR 已连接但注册在 LTE 上，是 EN-DC（NSA）的典型特征。
             fields["nsa_sa_clue"] = deriveNsaSaClue(fields["nr_state"], fields["rat"])
 
@@ -130,7 +154,8 @@ data class SnapshotSummary(
 
             fields["cellular_network_present"] = when {
                 connectivity.isBlank() -> UNKNOWN
-                connectivity.contains("TRANSPORT_CELLULAR") || connectivity.contains("CELLULAR") -> "true"
+                connectivity.contains("Transports: CELLULAR") ||
+                    connectivity.contains("TRANSPORT_CELLULAR") -> "true"
                 else -> "false"
             }
 
@@ -174,7 +199,15 @@ data class SnapshotSummary(
         }
 
         private fun deriveNsaSaClue(nrState: String?, rat: String?): String {
-            if (nrState == null || nrState == UNKNOWN) return UNKNOWN
+            if (nrState == null || nrState == UNKNOWN) {
+                // 没有 nrState 时，仅凭数据 RAT 也能给出粗判，但必须说明依据较弱。
+                val radio = rat?.uppercase().orEmpty()
+                return when {
+                    radio.contains("NR") -> "NR_DATA_RAT (仅据 connectivity 的 MOBILE[NR]，无 nrState 佐证)"
+                    radio.contains("LTE") -> "LTE_DATA_RAT (数据走 LTE，无 nrState 佐证)"
+                    else -> UNKNOWN
+                }
+            }
             val nr = nrState.uppercase()
             val radio = rat?.uppercase().orEmpty()
             return when {
