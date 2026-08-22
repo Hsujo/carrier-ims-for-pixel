@@ -484,6 +484,21 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             else -> ApplyStatus.FAILED
         }
 
+        // instrumentation 报成功但读回未体现目标值：记录下来供排查。
+        // 这里刻意不把成功翻转成失败：CarrierConfig 的生效是异步的，读回可能只是
+        // 尚未刷新；若据此判失败，就会重新引入本次要修复的那类误判。
+        // UI 无论如何都以 readback 刷新，因此不会显示成与系统不符的状态。
+        if (status != ApplyStatus.FAILED &&
+            readback != null &&
+            !readbackConfirms(readback, map, countryISO)
+        ) {
+            Log.w(
+                TAG,
+                "apply reported success but readback does not confirm it yet for " +
+                    "subId=${selectedSim.subId}"
+            )
+        }
+
         if (status != ApplyStatus.FAILED) {
             // 落盘的是读回的系统事实，而不是请求值，避免本地状态与系统状态分叉。
             saveConfiguration(selectedSim.subId, readback ?: map, countryMccOverride)
