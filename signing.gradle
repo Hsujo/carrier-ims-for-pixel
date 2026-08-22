@@ -1,17 +1,42 @@
-def kFile = rootProject.file('local.properties')
-def props = new Properties()
-if (kFile.canRead()) {
-    props.load(new FileInputStream(kFile))
-
-    if (props != null) {
-        android.signingConfigs.sign.storeFile file(props['SIGN_KEY_STORE_FILE'])
-        android.signingConfigs.sign.storePassword props['SIGN_KEY_STORE_PASSWORD']
-        android.signingConfigs.sign.keyAlias props['SIGN_KEY_ALIAS']
-        android.signingConfigs.sign.keyPassword props['SIGN_KEY_PASSWORD']
+// 官方签名材料来源：local.properties 优先，其次环境变量。
+// 两者都缺失时，仅为 debug 构建准备一个本地自签名回退，release 保持不可签名，
+// 避免用非官方密钥产出 release 包。
+def resolveSigningMaterial() {
+    def kFile = rootProject.file('local.properties')
+    if (kFile.canRead()) {
+        def props = new Properties()
+        kFile.withInputStream { props.load(it) }
+        if (props['SIGN_KEY_STORE_FILE']) {
+            return [
+                    storeFile    : props['SIGN_KEY_STORE_FILE'],
+                    storePassword: props['SIGN_KEY_STORE_PASSWORD'],
+                    keyAlias     : props['SIGN_KEY_ALIAS'],
+                    keyPassword  : props['SIGN_KEY_PASSWORD'],
+            ]
+        }
     }
+    if (System.getenv('SIGN_KEY_STORE_FILE')) {
+        return [
+                storeFile    : System.getenv('SIGN_KEY_STORE_FILE'),
+                storePassword: System.getenv('SIGN_KEY_STORE_PASSWORD'),
+                keyAlias     : System.getenv('SIGN_KEY_ALIAS'),
+                keyPassword  : System.getenv('SIGN_KEY_PASSWORD'),
+        ]
+    }
+    return null
+}
+
+def material = resolveSigningMaterial()
+if (material != null) {
+    android.signingConfigs.sign.storeFile file(material.storeFile)
+    android.signingConfigs.sign.storePassword material.storePassword
+    android.signingConfigs.sign.keyAlias material.keyAlias
+    android.signingConfigs.sign.keyPassword material.keyPassword
 } else {
-    android.signingConfigs.sign.storeFile file(System.getenv('SIGN_KEY_STORE_FILE'))
-    android.signingConfigs.sign.storePassword System.getenv('SIGN_KEY_STORE_PASSWORD')
-    android.signingConfigs.sign.keyAlias System.getenv('SIGN_KEY_ALIAS')
-    android.signingConfigs.sign.keyPassword System.getenv('SIGN_KEY_PASSWORD')
+    // 无签名材料：debug 退回到 AGP 自带的 debug keystore，让侧载开发版仍可构建安装。
+    // 该 keystore 由 Android SDK 自动生成/管理，不包含任何机密，也不会被提交。
+    logger.lifecycle('signing.gradle: no signing material found, debug builds fall back to the Android debug keystore')
+    def debugSigningConfig = android.signingConfigs.findByName('debug')
+    android.buildTypes.debug.signingConfig = debugSigningConfig
+    android.buildTypes.release.signingConfig = null
 }

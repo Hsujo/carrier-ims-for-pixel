@@ -139,6 +139,8 @@ android {
             if (debugApplicationIdSuffix.isNotBlank()) {
                 applicationIdSuffix = debugApplicationIdSuffix
             }
+            // 侧载开发版：跳过开机自动恢复等会影响系统真实配置的自动行为。
+            buildConfigField("boolean", "SIDE_BY_SIDE_DEV_BUILD", debugApplicationIdSuffix.isNotBlank().toString())
             signingConfig = signingConfigs.getByName("sign")
         }
         release {
@@ -148,7 +150,17 @@ android {
             vcsInfo.include = false
             proguardFiles("proguard-rules.pro")
             versionNameSuffix = ".r$gitVersionCode.$gitVersionName"
+            buildConfigField("boolean", "SIDE_BY_SIDE_DEV_BUILD", "false")
             signingConfig = signingConfigs.getByName("sign")
+        }
+    }
+    sourceSets {
+        // 仅当 debug 构建改写了 applicationId 时才叠加这份资源覆盖，
+        // 让侧载开发版在桌面上与官方包一眼可分。
+        if (debugApplicationIdSuffix.isNotBlank()) {
+            getByName("debug") {
+                res.srcDir("src/debugSuffixed/res")
+            }
         }
     }
     compileOptions {
