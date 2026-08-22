@@ -1,0 +1,54 @@
+name: Android Sideload Dev Build
+
+# 产出与官方包并存的侧载测试 APK（applicationId 带 .hsujo 后缀）。
+# 刻意不注入 SIGN_KEY_*：signing.gradle 在没有签名材料时会退回
+# Android debug keystore，因此本工作流不需要任何仓库 secret。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'claude/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'ci skip')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest -Pturboims.debugApplicationIdSuffix=.hsujo
+
+      - name: Build sideload debug APK
+        run: ./gradlew assembleDebug -Pturboims.debugApplicationIdSuffix=.hsujo
+
+      - name: Report APK identity
+        run: |
+          AAPT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt
+          "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk \
+            | grep -E "^package|application-label:"
+
+      - name: Rename APK
+        run: |
+          mkdir -p outputs
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "outputs/TurboIMS-Hsujo-Dev-${GITHUB_SHA::8}.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboIMS-Hsujo-Dev
+          path: outputs/*.apk
+          if-no-files-found: error
