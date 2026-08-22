@@ -189,14 +189,18 @@ class DiagnosticsActivity : BaseActivity() {
                         "v4=${link.hasDefaultRouteV4} v6=${link.hasDefaultRouteV6}"
                     )
                     KeyValueRow("DNS", link.dnsServers.ifEmpty { listOf("(none)") }.joinToString())
+                    val boundNote = if (probe.ipReachability.boundToCellular) "" else " (默认路由)"
                     KeyValueRow(
                         "IP 可达",
-                        "${probe.ipReachability.successes}/${probe.ipReachability.attempts}"
+                        "${probe.ipReachability.successes}/${probe.ipReachability.attempts}$boundNote"
                     )
                     KeyValueRow(
                         "域名可达",
-                        "${probe.dnsResolution.successes}/${probe.dnsResolution.attempts}"
+                        "${probe.dnsResolution.successes}/${probe.dnsResolution.attempts}$boundNote"
                     )
+                    link.error?.let {
+                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 if (state.refreshingLive) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

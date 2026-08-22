@@ -103,6 +103,7 @@ object SnapshotStore {
         appendLine("verdict: ${probe.verdict}")
         appendLine()
         val link = probe.link
+        appendLine("link_state_unreadable=${link.unreadable}")
         appendLine("has_cellular_network=${link.hasCellularNetwork}")
         appendLine("validated=${link.validated ?: "UNKNOWN"}")
         appendLine("interface=${link.interfaceName ?: "UNKNOWN"}")
@@ -119,7 +120,10 @@ object SnapshotStore {
         appendLine("capabilities: ${link.capabilities ?: "UNKNOWN"}")
         appendLine()
         listOf(probe.ipReachability, probe.dnsResolution).forEach { p ->
-            appendLine("${p.label}: target=${p.target} ${p.successes}/${p.attempts} ok=${p.ok}")
+            appendLine(
+                "${p.label}: target=${p.target} ${p.successes}/${p.attempts} " +
+                    "ok=${p.ok} bound_to_cellular=${p.boundToCellular}"
+            )
             p.lastError?.let { appendLine("  last_error=$it") }
         }
     }
