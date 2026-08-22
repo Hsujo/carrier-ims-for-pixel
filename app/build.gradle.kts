@@ -168,6 +168,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
     buildFeatures {
+        aidl = true
         buildConfig = true
         compose = true
     }

@@ -29,6 +29,10 @@
             android:name="io.github.vvb2060.ims.ui.DumpActivity"
             android:exported="false"
             android:theme="@style/Theme.TurbolIms" />
+        <activity
+            android:name="io.github.vvb2060.ims.ui.DiagnosticsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TurbolIms" />
 
         <service
             android:name="io.github.vvb2060.ims.tiles.SIM1VoLTETileService"

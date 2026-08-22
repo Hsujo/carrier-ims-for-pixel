@@ -332,4 +332,23 @@
 
     <!-- Logcat -->
     <string name="title_filter_log_level">Select filter log level</string>
+    <string name="diagnostics_5g_title">5G data diagnostics</string>
+    <string name="diagnostics_target">Target SIM</string>
+    <string name="diagnostics_no_sim">No single SIM selected; snapshots will omit SIM-specific data.</string>
+    <string name="diagnostics_shell_channel">Shell channel (Shizuku)</string>
+    <string name="diagnostics_shell_checking">Checking…</string>
+    <string name="diagnostics_shell_ok">Available — radio log and dumpsys can be collected.</string>
+    <string name="diagnostics_shell_unavailable">Unavailable — radio log and dumpsys will be missing from snapshots.</string>
+    <string name="diagnostics_live_status">Live cellular link</string>
+    <string name="diagnostics_live_unknown">Not read yet.</string>
+    <string name="diagnostics_refresh_live">Refresh live status</string>
+    <string name="diagnostics_capture">Capture snapshot</string>
+    <string name="diagnostics_capture_hint">Capture while the fault is happening, then again once the network recovers. This page never changes your preferred network type.</string>
+    <string name="diagnostics_record_bad">Record 5G fault</string>
+    <string name="diagnostics_record_good">Record normal state</string>
+    <string name="diagnostics_saved">Saved snapshots (%d)</string>
+    <string name="diagnostics_saved_empty">None yet.</string>
+    <string name="diagnostics_delete">Delete</string>
+    <string name="diagnostics_export_pending">Raw dumps are kept in full. ZIP export and BAD/GOOD comparison arrive in the next step.</string>
+    <string name="diagnostics_open">5G data diagnostics</string>
 </resources>

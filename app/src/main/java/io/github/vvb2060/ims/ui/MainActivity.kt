@@ -1313,6 +1313,14 @@ class MainActivity : BaseActivity() {
                         ),
                         nrActualAvailabilities = nrActualAvailabilities,
                         applyingNrMode = applyingConfiguration,
+                        onOpenDiagnostics = {
+                            val sim = extraSelectedSim
+                            if (sim == null || sim.subId < 0) {
+                                Toast.makeText(context, R.string.select_single_sim, Toast.LENGTH_SHORT).show()
+                            } else {
+                                startActivity(DiagnosticsActivity.intent(this@MainActivity, sim.subId))
+                            }
+                        },
                         onRefreshNrActual = {
                             val sim = extraSelectedSim
                             if (sim != null && sim.subId >= 0 && shizukuStatus == ShizukuStatus.READY) {
@@ -2015,6 +2023,7 @@ private fun ExtraToolsPage(
     applyingNrMode: Boolean,
     onSelectNrMode: (NrMode) -> Unit,
     onRefreshNrActual: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
     onSelectSim: (SimSelection) -> Unit,
     onRefreshSimList: () -> Unit,
     onFixCaptivePortal: () -> Unit,
@@ -2062,6 +2071,11 @@ private fun ExtraToolsPage(
         status = networkExitStatus,
         error = networkExitError,
         onCheck = onCheckNetworkExit,
+    )
+    DiagnosticsEntryCard(
+        selectedSim = selectedSim,
+        enabled = shizukuStatus == ShizukuStatus.READY,
+        onOpen = onOpenDiagnostics,
     )
     NrModeCard(
         selectedSim = selectedSim,
@@ -2213,6 +2227,43 @@ private fun NetworkExitCard(
                 KeyValueRow(stringResource(R.string.network_exit_org), it.org)
                 KeyValueRow(stringResource(R.string.network_exit_risk), it.risk)
                 KeyValueRow(stringResource(R.string.network_exit_services), serviceSummary(it))
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsEntryCard(
+    selectedSim: SimSelection?,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.diagnostics_5g_title),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(R.string.diagnostics_capture_hint),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Button(
+                onClick = onOpen,
+                enabled = enabled && (selectedSim?.subId ?: -1) >= 0,
+                modifier = Modifier.height(40.dp)
+            ) {
+                Text(stringResource(R.string.diagnostics_open))
             }
         }
     }

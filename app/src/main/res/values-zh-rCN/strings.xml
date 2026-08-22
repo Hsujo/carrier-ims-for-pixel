@@ -332,4 +332,23 @@
 
     <!-- Logcat -->
     <string name="title_filter_log_level">请选择日志过滤等级</string>
+    <string name="diagnostics_5g_title">5G 数据诊断</string>
+    <string name="diagnostics_target">目标 SIM</string>
+    <string name="diagnostics_no_sim">未选中单张 SIM，快照将缺少 SIM 相关数据。</string>
+    <string name="diagnostics_shell_channel">Shell 通道（Shizuku）</string>
+    <string name="diagnostics_shell_checking">检测中…</string>
+    <string name="diagnostics_shell_ok">可用 —— radio 日志与 dumpsys 可以采集。</string>
+    <string name="diagnostics_shell_unavailable">不可用 —— 快照将缺少 radio 日志与 dumpsys。</string>
+    <string name="diagnostics_live_status">实时蜂窝链路</string>
+    <string name="diagnostics_live_unknown">尚未读取。</string>
+    <string name="diagnostics_refresh_live">刷新实时状态</string>
+    <string name="diagnostics_capture">采集快照</string>
+    <string name="diagnostics_capture_hint">故障发生时记录一次，网络恢复后再记录一次。本页面不会修改首选网络类型。</string>
+    <string name="diagnostics_record_bad">记录 5G 故障</string>
+    <string name="diagnostics_record_good">记录正常状态</string>
+    <string name="diagnostics_saved">已保存快照（%d）</string>
+    <string name="diagnostics_saved_empty">暂无。</string>
+    <string name="diagnostics_delete">删除</string>
+    <string name="diagnostics_export_pending">原始 dump 完整保留。ZIP 导出与 BAD/GOOD 对比在下一步实现。</string>
+    <string name="diagnostics_open">5G 数据诊断</string>
 </resources>

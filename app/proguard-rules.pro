@@ -39,3 +39,8 @@
 
 -dontwarn androidx.window.extensions.**
 -dontwarn androidx.window.sidecar.**
+# Shizuku 用户服务在另一个进程中按类名反射实例化，R8 无法看到该引用。
+# release 构建若把它裁掉，诊断页的 shell 通道会静默失效。
+-keep class io.github.vvb2060.ims.shell.ShellService { *; }
+-keep interface io.github.vvb2060.ims.shell.IShellService { *; }
+-keep class io.github.vvb2060.ims.shell.IShellService$Stub { *; }
