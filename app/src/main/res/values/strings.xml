@@ -124,6 +124,16 @@
     <string name="ut_desc">Enable call waiting/forwarding services (carrier support required)</string>
     <string name="_5g_nr">5G NR (NSA/SA)</string>
     <string name="_5g_nr_desc">Enable 5G network (Non-Standalone/Standalone)</string>
+    <string name="nr_mode">NR mode</string>
+    <string name="nr_mode_desc">Which NR access modes the carrier config allows. Diagnostic control for 5G data problems.</string>
+    <string name="nr_mode_nsa">NSA only [1]</string>
+    <string name="nr_mode_nsa_sa">NSA + SA [1,2]</string>
+    <string name="nr_mode_sa">SA only [2] (experimental)</string>
+    <string name="nr_mode_target_sim">Target SIM</string>
+    <string name="nr_mode_requires_5g_nr">Enable 5G NR first to change the NR mode.</string>
+    <string name="nr_mode_actual">Actual: %s</string>
+    <string name="nr_mode_mismatch">Requested %1$s but carrier config reports %2$s</string>
+    <string name="nr_mode_requires_single_sim">Select a single SIM to change NR mode.</string>
     <string name="_5g_thresholds">5G Signal Strength Adjust</string>
     <string name="_5g_thresholds_desc">Adjust 5G signal strength to match China mainland thresholds</string>
     <string name="_5g_plus_icon">5GA/5G+ Icon</string>

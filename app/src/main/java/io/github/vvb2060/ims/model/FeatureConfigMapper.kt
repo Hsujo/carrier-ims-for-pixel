@@ -109,6 +109,11 @@ object FeatureConfigMapper {
         val nrEnabled = arr?.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA) == true ||
             arr?.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA) == true
         map[Feature.FIVE_G_NR] = FeatureValue(nrEnabled, FeatureValueType.BOOLEAN)
+        // 读不出已知模式时留空，由 UI 显示 UNKNOWN，不猜测。
+        map[Feature.NR_MODE] = FeatureValue(
+            NrMode.fromAvailabilities(arr)?.storageKey ?: "",
+            FeatureValueType.STRING
+        )
 
         val thresholds = bundle.getIntArray(CarrierConfigManager.KEY_5G_NR_SSRSRP_THRESHOLDS_INT_ARRAY)
         val thresholdEnabled = thresholds?.contentEquals(FIVE_G_THRESHOLDS) == true

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import android.provider.Settings
+import android.telephony.CarrierConfigManager
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -19,6 +20,7 @@ import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.ShizukuProvider
 import io.github.vvb2060.ims.model.CarrierIsoRules
 import io.github.vvb2060.ims.model.Feature
+import io.github.vvb2060.ims.model.NrMode
 import io.github.vvb2060.ims.model.FeatureConfigMapper
 import io.github.vvb2060.ims.model.FeatureValue
 import io.github.vvb2060.ims.model.FeatureValueType
@@ -432,6 +434,8 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val enable5GThreshold = (map[Feature.FIVE_G_THRESHOLDS]?.data ?: true) as Boolean
         val enable5GPlusIcon = (map[Feature.FIVE_G_PLUS_ICON]?.data ?: true) as Boolean
         val enableShow4GForLTE = (map[Feature.SHOW_4G_FOR_LTE]?.data ?: false) as Boolean
+        // 读回值可能是空串（UNKNOWN），此时沿用默认模式，不擅自改变用户当前配置。
+        val nrMode = NrMode.fromStorageKey(map[Feature.NR_MODE]?.data as? String) ?: NrMode.DEFAULT
 
         val bundle = ImsModifier.buildBundle(
             carrierName,
@@ -447,7 +451,8 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             enable5GNR,
             enable5GThreshold,
             enable5GPlusIcon,
-            enableShow4GForLTE
+            enableShow4GForLTE,
+            nrMode,
         )
         bundle.putInt(ImsModifier.BUNDLE_SELECT_SIM_ID, selectedSim.subId)
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
@@ -516,10 +521,19 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             if (feature == Feature.CARRIER_NAME) continue
             // ISO 与 TikTok 修复由 resolvedCountryIso 统一校验。
             if (feature == Feature.COUNTRY_ISO || feature == Feature.TIKTOK_NETWORK_FIX) continue
+            // NR 模式单独校验（见下），且仅在 5G NR 启用时才会被写入。
+            if (feature == Feature.NR_MODE) continue
             val enabled = target.data as? Boolean ?: continue
             if (!enabled) continue
             verifiable++
             if ((readback[feature]?.data as? Boolean) != true) return false
+        }
+        if ((requested[Feature.FIVE_G_NR]?.data as? Boolean) == true) {
+            val requestedMode =
+                NrMode.fromStorageKey(requested[Feature.NR_MODE]?.data as? String) ?: NrMode.DEFAULT
+            val actualMode = NrMode.fromStorageKey(readback[Feature.NR_MODE]?.data as? String)
+            verifiable++
+            if (actualMode != requestedMode) return false
         }
         if (!resolvedCountryIso.isNullOrBlank()) {
             verifiable++
@@ -610,6 +624,20 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             FeatureConfigMapper.readKeys
         ) ?: return null
         return FeatureConfigMapper.fromBundle(bundle)
+    }
+
+    /**
+     * 读回 `carrier_nr_availabilities_int_array` 的原始值，用于在 UI 上展示
+     * requested vs actual。返回 null 表示读取失败或该键不存在。
+     */
+    suspend fun readNrAvailabilities(subId: Int): IntArray? {
+        if (subId < 0) return null
+        val bundle = ShizukuProvider.readCarrierConfig(
+            application,
+            subId,
+            arrayOf(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY)
+        ) ?: return null
+        return bundle.getIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY)
     }
 
     suspend fun readImsRegistrationStatus(subId: Int): Boolean? {

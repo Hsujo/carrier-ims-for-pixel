@@ -99,6 +99,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -131,6 +132,7 @@ import io.github.vvb2060.ims.BuildConfig
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.UpdateApkCleanup
 import io.github.vvb2060.ims.model.Feature
+import io.github.vvb2060.ims.model.NrMode
 import io.github.vvb2060.ims.model.FeatureValue
 import io.github.vvb2060.ims.model.FeatureValueType
 import io.github.vvb2060.ims.model.AdPlacement
@@ -529,6 +531,7 @@ class MainActivity : BaseActivity() {
         val countryMccDraftBySubId = remember { mutableStateMapOf<Int, String>() }
         val committedCountryMccBySubId = remember { mutableStateMapOf<Int, String>() }
         val countryIsoApplySignalBySubId = remember { mutableStateMapOf<Int, Int>() }
+        var nrActualAvailabilities by remember { mutableStateOf("UNKNOWN") }
         // 每次回到前台都重新读取系统真实 CarrierConfig：官方版或其他工具可能在
         // 本应用不可见期间改动过同一套配置，本地状态不能被当成系统状态。
         var configRefreshSignal by remember { mutableIntStateOf(0) }
@@ -660,6 +663,13 @@ class MainActivity : BaseActivity() {
                 }
             }
             syncFeatureState(featureSwitches, committedFeatureSwitches)
+            nrActualAvailabilities = if (
+                shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0
+            ) {
+                NrMode.formatAvailabilities(viewModel.readNrAvailabilities(currentSelected.subId))
+            } else {
+                "UNKNOWN"
+            }
             if (currentSelected.subId >= 0) {
                 val savedMcc = viewModel.loadSavedCountryMccOverride(currentSelected.subId)
                 countryMccDraftBySubId[currentSelected.subId] = savedMcc
@@ -1307,6 +1317,71 @@ class MainActivity : BaseActivity() {
                         networkExitStatus = networkExitStatus,
                         networkExitError = networkExitError,
                         configBackups = configBackups,
+                        nrEnabled = (featureSwitches[Feature.FIVE_G_NR]?.data as? Boolean) == true,
+                        nrSelectedMode = NrMode.fromStorageKey(
+                            featureSwitches[Feature.NR_MODE]?.data as? String
+                        ),
+                        nrActualAvailabilities = nrActualAvailabilities,
+                        applyingNrMode = applyingConfiguration,
+                        onSelectNrMode = { mode ->
+                            val sim = extraSelectedSim
+                            if (sim == null || sim.subId < 0) {
+                                Toast.makeText(context, R.string.nr_mode_requires_single_sim, Toast.LENGTH_SHORT).show()
+                            } else if (shizukuStatus != ShizukuStatus.READY) {
+                                Toast.makeText(context, R.string.shizuku_not_running_msg, Toast.LENGTH_LONG).show()
+                            } else if (!applyingConfiguration) {
+                                scope.launch {
+                                    applyingConfiguration = true
+                                    try {
+                                        val target = buildCompleteFeatureMap(committedFeatureSwitches).apply {
+                                            put(
+                                                Feature.NR_MODE,
+                                                FeatureValue(mode.storageKey, FeatureValueType.STRING)
+                                            )
+                                        }
+                                        val result = viewModel.onApplyConfiguration(
+                                            sim,
+                                            target,
+                                            countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
+                                        )
+                                        // Apply 后立即读回真实数组，UI 显示 requested vs actual。
+                                        val actual = viewModel.readNrAvailabilities(sim.subId)
+                                        nrActualAvailabilities = NrMode.formatAvailabilities(actual)
+                                        val resultMsg = result.errorMessage
+                                        if (resultMsg != null) {
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(R.string.config_failed, resultMsg),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            applyReadbackToUi(result.readback)
+                                            val actualMode = NrMode.fromAvailabilities(actual)
+                                            if (actualMode != mode) {
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(
+                                                        R.string.nr_mode_mismatch,
+                                                        NrMode.formatAvailabilities(mode.toAvailabilities()),
+                                                        nrActualAvailabilities,
+                                                    ),
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            result.cleanupWarning?.let {
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.config_applied_with_warning, it),
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        }
+                                    } finally {
+                                        applyingConfiguration = false
+                                    }
+                                }
+                            }
+                        },
                         onSelectSim = { selectedSim = it },
                         onRefreshSimList = refreshSimListAction,
                         onFixCaptivePortal = fixCaptivePortalAction,
@@ -1934,6 +2009,11 @@ private fun ExtraToolsPage(
     networkExitStatus: NetworkExitStatus?,
     networkExitError: String?,
     configBackups: List<ConfigBackupSnapshot>,
+    nrEnabled: Boolean,
+    nrSelectedMode: NrMode?,
+    nrActualAvailabilities: String,
+    applyingNrMode: Boolean,
+    onSelectNrMode: (NrMode) -> Unit,
     onSelectSim: (SimSelection) -> Unit,
     onRefreshSimList: () -> Unit,
     onFixCaptivePortal: () -> Unit,
@@ -1981,6 +2061,15 @@ private fun ExtraToolsPage(
         status = networkExitStatus,
         error = networkExitError,
         onCheck = onCheckNetworkExit,
+    )
+    NrModeCard(
+        selectedSim = selectedSim,
+        nrEnabled = nrEnabled,
+        selectedMode = nrSelectedMode,
+        actualAvailabilities = nrActualAvailabilities,
+        applying = applyingNrMode,
+        enabled = shizukuStatus == ShizukuStatus.READY && featureSwitchesEnabled,
+        onSelectMode = onSelectNrMode,
     )
     TiktokFixCard(
         enabled = tiktokEnabled,
@@ -2122,6 +2211,94 @@ private fun NetworkExitCard(
                 KeyValueRow(stringResource(R.string.network_exit_org), it.org)
                 KeyValueRow(stringResource(R.string.network_exit_risk), it.risk)
                 KeyValueRow(stringResource(R.string.network_exit_services), serviceSummary(it))
+            }
+        }
+    }
+}
+
+@Composable
+private fun NrModeCard(
+    selectedSim: SimSelection?,
+    nrEnabled: Boolean,
+    selectedMode: NrMode?,
+    actualAvailabilities: String,
+    applying: Boolean,
+    enabled: Boolean,
+    onSelectMode: (NrMode) -> Unit,
+) {
+    val singleSimSelected = (selectedSim?.subId ?: -1) >= 0
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.nr_mode),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(R.string.nr_mode_desc),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            // 明确写出目标 subId：所有系统写入都只作用于当前选中的这张卡。
+            if (singleSimSelected) {
+                KeyValueRow(
+                    stringResource(R.string.nr_mode_target_sim),
+                    "${selectedSim?.showTitle.orEmpty()} · subId=${selectedSim?.subId}"
+                )
+            } else {
+                Text(
+                    text = stringResource(R.string.nr_mode_requires_single_sim),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            KeyValueRow(
+                stringResource(R.string.nr_mode_actual),
+                actualAvailabilities
+            )
+            if (!nrEnabled) {
+                Text(
+                    text = stringResource(R.string.nr_mode_requires_5g_nr),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            NrMode.entries.forEach { mode ->
+                val label = when (mode) {
+                    NrMode.NSA_ONLY -> stringResource(R.string.nr_mode_nsa)
+                    NrMode.NSA_AND_SA -> stringResource(R.string.nr_mode_nsa_sa)
+                    NrMode.SA_ONLY -> stringResource(R.string.nr_mode_sa)
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = selectedMode == mode,
+                            enabled = enabled && !applying && singleSimSelected && nrEnabled,
+                            role = Role.RadioButton,
+                            onClick = { onSelectMode(mode) },
+                        )
+                ) {
+                    RadioButton(
+                        selected = selectedMode == mode,
+                        onClick = null,
+                        enabled = enabled && !applying && singleSimSelected && nrEnabled,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = label, fontSize = 14.sp)
+                }
+            }
+            if (applying) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
         }
     }

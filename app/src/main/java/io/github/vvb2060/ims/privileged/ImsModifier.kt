@@ -14,6 +14,7 @@ import android.telephony.TelephonyManager
 import android.util.Log
 import com.android.internal.telephony.ITelephony
 import io.github.vvb2060.ims.LogcatRepository
+import io.github.vvb2060.ims.model.NrMode
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 
@@ -65,6 +66,7 @@ class ImsModifier : Instrumentation() {
             enable5GThreshold: Boolean,
             enable5GPlusIcon: Boolean,
             enableShow4GForLTE: Boolean,
+            nrMode: NrMode = NrMode.DEFAULT,
         ): Bundle {
             val bundle = Bundle()
             // 运营商名称
@@ -150,10 +152,7 @@ class ImsModifier : Instrumentation() {
             if (enable5GNR) {
                 bundle.putIntArray(
                     CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY,
-                    intArrayOf(
-                        CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA,
-                        CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA
-                    )
+                    nrMode.toAvailabilities()
                 )
                 if (enable5GPlusIcon) {
                     // 5GA / 5G+ 图标判定逻辑：

@@ -124,6 +124,16 @@
     <string name="ut_desc">启用呼叫等待/转移等业务（需运营商支持）</string>
     <string name="_5g_nr">5G NR（NSA/SA）</string>
     <string name="_5g_nr_desc">启用 5G 网络（非独立/独立组网）</string>
+    <string name="nr_mode">NR 模式</string>
+    <string name="nr_mode_desc">运营商配置允许的 NR 接入模式。用于排查 5G 无数据问题的诊断开关。</string>
+    <string name="nr_mode_nsa">仅 NSA [1]</string>
+    <string name="nr_mode_nsa_sa">NSA + SA [1,2]</string>
+    <string name="nr_mode_sa">仅 SA [2]（实验性）</string>
+    <string name="nr_mode_target_sim">目标 SIM</string>
+    <string name="nr_mode_requires_5g_nr">请先启用 5G NR 再修改 NR 模式。</string>
+    <string name="nr_mode_actual">实际：%s</string>
+    <string name="nr_mode_mismatch">请求 %1$s，但运营商配置读回 %2$s</string>
+    <string name="nr_mode_requires_single_sim">请先选择单张 SIM 卡再修改 NR 模式。</string>
     <string name="_5g_thresholds">5G信号强度调整</string>
     <string name="_5g_thresholds_desc">5G信号强度调整为匹配中国大陆阈值</string>
     <string name="_5g_plus_icon">5GA/5G+ 图标显示</string>
