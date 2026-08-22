@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.vvb2060.ims.ShizukuProvider
+import android.net.Uri
+import io.github.vvb2060.ims.diagnostics.DiagnosticsExporter
 import io.github.vvb2060.ims.diagnostics.NetworkProbe
 import io.github.vvb2060.ims.diagnostics.SnapshotCollector
 import io.github.vvb2060.ims.diagnostics.SnapshotKind
@@ -27,6 +29,9 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         val refreshingLive: Boolean = false,
         val shellAvailable: Boolean? = null,
         val message: String? = null,
+        val exporting: Boolean = false,
+        /** 导出成功后待分享的 ZIP，消费后清空。 */
+        val exportUri: Uri? = null,
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -125,6 +130,29 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             SnapshotStore.delete(snapshot)
             refreshSnapshots()
         }
+    }
+
+    /**
+     * 打包全部快照。失败不抛出，原因通过 message 呈现。
+     */
+    fun export(mccMnc: String?) {
+        if (_uiState.value.exporting) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(exporting = true, message = null)
+            val result = DiagnosticsExporter.export(getApplication(), mccMnc)
+            _uiState.value = _uiState.value.copy(
+                exporting = false,
+                exportUri = result.getOrNull()?.uri,
+                message = result.fold(
+                    onSuccess = { "已生成 ${it.file.name}（${it.snapshotCount} 份快照）" },
+                    onFailure = { "导出失败：${it.message ?: it.javaClass.simpleName}" },
+                ),
+            )
+        }
+    }
+
+    fun consumeExportUri() {
+        _uiState.value = _uiState.value.copy(exportUri = null)
     }
 
     fun consumeMessage() {

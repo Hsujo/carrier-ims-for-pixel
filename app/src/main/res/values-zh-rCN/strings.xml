@@ -351,4 +351,6 @@
     <string name="diagnostics_delete">删除</string>
     <string name="diagnostics_export_pending">原始 dump 完整保留。ZIP 导出与 BAD/GOOD 对比在下一步实现。</string>
     <string name="diagnostics_open">5G 数据诊断</string>
+    <string name="diagnostics_export">导出诊断包</string>
+    <string name="diagnostics_export_privacy">原始 dumpsys 与 radio 日志完整保留，可能含 IMSI、ICCID、IMEI 等标识；summary.txt 与 metadata.txt 不含。对外分享前请自行确认。</string>
 </resources>

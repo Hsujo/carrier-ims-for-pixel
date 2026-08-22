@@ -1,6 +1,7 @@
 package io.github.vvb2060.ims.ui
 
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +65,13 @@ class DiagnosticsActivity : BaseActivity() {
             viewModel.checkShellAvailability()
         }
 
+        LaunchedEffect(state.exportUri) {
+            state.exportUri?.let { uri ->
+                shareExport(uri)
+                viewModel.consumeExportUri()
+            }
+        }
+
         LaunchedEffect(state.message) {
             state.message?.let {
                 Toast.makeText(context, it, Toast.LENGTH_LONG).show()
@@ -98,7 +106,9 @@ class DiagnosticsActivity : BaseActivity() {
                 )
                 SnapshotListCard(
                     snapshots = state.snapshots,
+                    exporting = state.exporting,
                     onDelete = { viewModel.deleteSnapshot(it) },
+                    onExport = { viewModel.export(selectedSim?.let { "${it.mcc}${it.mnc}" }) },
                 )
             }
         }
@@ -278,7 +288,9 @@ class DiagnosticsActivity : BaseActivity() {
     @Composable
     private fun SnapshotListCard(
         snapshots: List<io.github.vvb2060.ims.diagnostics.SnapshotStore.StoredSnapshot>,
+        exporting: Boolean,
         onDelete: (io.github.vvb2060.ims.diagnostics.SnapshotStore.StoredSnapshot) -> Unit,
+        onExport: () -> Unit,
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -317,10 +329,21 @@ class DiagnosticsActivity : BaseActivity() {
                     }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
+                Button(
+                    onClick = onExport,
+                    enabled = !exporting && snapshots.isNotEmpty(),
+                    modifier = Modifier.height(40.dp),
+                ) {
+                    Text(stringResource(R.string.diagnostics_export))
+                }
+                if (exporting) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                // 文档要求：raw dump 含身份标识时导出页必须给出明确提示。
                 Text(
-                    stringResource(R.string.diagnostics_export_pending),
+                    stringResource(R.string.diagnostics_export_privacy),
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.colorScheme.error,
                 )
             }
         }
@@ -339,6 +362,20 @@ class DiagnosticsActivity : BaseActivity() {
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier.padding(start = 8.dp),
             )
+        }
+    }
+
+    /** 用系统分享面板发出 ZIP；授予临时读权限，不需要任何存储权限。 */
+    private fun shareExport(uri: Uri) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching {
+            startActivity(Intent.createChooser(intent, getString(R.string.diagnostics_export)))
+        }.onFailure {
+            Toast.makeText(this, it.message ?: "share failed", Toast.LENGTH_LONG).show()
         }
     }
 

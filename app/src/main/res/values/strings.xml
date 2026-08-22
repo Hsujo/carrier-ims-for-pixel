@@ -351,4 +351,6 @@
     <string name="diagnostics_delete">Delete</string>
     <string name="diagnostics_export_pending">Raw dumps are kept in full. ZIP export and BAD/GOOD comparison arrive in the next step.</string>
     <string name="diagnostics_open">5G data diagnostics</string>
+    <string name="diagnostics_export">Export diagnostics ZIP</string>
+    <string name="diagnostics_export_privacy">Raw dumpsys and radio logs are kept in full and may contain IMSI, ICCID or IMEI. summary.txt and metadata.txt do not. Check before sharing outside.</string>
 </resources>

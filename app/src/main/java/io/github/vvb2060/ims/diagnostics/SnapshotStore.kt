@@ -51,6 +51,11 @@ object SnapshotStore {
 
                 File(dir, "probes.txt").writeText(buildProbeText(snapshot))
 
+                // 摘要只是索引；解析失败的字段为 UNKNOWN，原始 dump 仍然完整保留。
+                runCatching {
+                    File(dir, "summary.txt").writeText(SnapshotSummary.from(snapshot).toText())
+                }.onFailure { Log.w(TAG, "failed to write summary.txt", it) }
+
                 cleanupOldSnapshots(context, snapshot.kind)
                 StoredSnapshot(snapshot.name, snapshot.kind, dir, snapshot.takenAtMillis)
             }
