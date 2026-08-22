@@ -1310,6 +1310,16 @@ class MainActivity : BaseActivity() {
                         ),
                         nrActualAvailabilities = nrActualAvailabilities,
                         applyingNrMode = applyingConfiguration,
+                        onRefreshNrActual = {
+                            val sim = extraSelectedSim
+                            if (sim != null && sim.subId >= 0 && shizukuStatus == ShizukuStatus.READY) {
+                                scope.launch {
+                                    nrActualAvailabilities = NrMode.formatAvailabilities(
+                                        viewModel.readNrAvailabilities(sim.subId)
+                                    )
+                                }
+                            }
+                        },
                         onSelectNrMode = { mode ->
                             val sim = extraSelectedSim
                             if (sim == null || sim.subId < 0) {
@@ -2001,6 +2011,7 @@ private fun ExtraToolsPage(
     nrActualAvailabilities: String,
     applyingNrMode: Boolean,
     onSelectNrMode: (NrMode) -> Unit,
+    onRefreshNrActual: () -> Unit,
     onSelectSim: (SimSelection) -> Unit,
     onRefreshSimList: () -> Unit,
     onFixCaptivePortal: () -> Unit,
@@ -2057,6 +2068,7 @@ private fun ExtraToolsPage(
         applying = applyingNrMode,
         enabled = shizukuStatus == ShizukuStatus.READY && featureSwitchesEnabled,
         onSelectMode = onSelectNrMode,
+        onRefreshActual = onRefreshNrActual,
     )
     TiktokFixCard(
         enabled = tiktokEnabled,
@@ -2212,6 +2224,7 @@ private fun NrModeCard(
     applying: Boolean,
     enabled: Boolean,
     onSelectMode: (NrMode) -> Unit,
+    onRefreshActual: () -> Unit,
 ) {
     val singleSimSelected = (selectedSim?.subId ?: -1) >= 0
     Card(
@@ -2251,6 +2264,15 @@ private fun NrModeCard(
                 stringResource(R.string.nr_mode_actual),
                 actualAvailabilities
             )
+            // 非系统应用只能写非持久化 override，可能被后续的 carrier config 重载丢弃。
+            // 这个按钮让用户随时复读，确认设置是否还在。
+            Button(
+                onClick = onRefreshActual,
+                enabled = enabled && !applying && singleSimSelected,
+                modifier = Modifier.height(40.dp)
+            ) {
+                Text(stringResource(R.string.nr_mode_reread))
+            }
             if (!nrEnabled) {
                 Text(
                     text = stringResource(R.string.nr_mode_requires_5g_nr),

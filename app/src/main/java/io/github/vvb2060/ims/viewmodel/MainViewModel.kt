@@ -652,7 +652,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             subId,
             arrayOf(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY)
         ) ?: return null
-        return bundle.getIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY)
+        val values = bundle.getIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY)
+        // 明确记录读到的值：只有写入侧有日志时，无法判断某个时刻系统里到底是什么。
+        Log.i(TAG, "readNrAvailabilities: subId=$subId value=${NrMode.formatAvailabilities(values)}")
+        return values
     }
 
     suspend fun readImsRegistrationStatus(subId: Int): Boolean? {
@@ -1340,6 +1343,22 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 val mismatch = if (appEnabled != null && systemEnabled != null && appEnabled != systemEnabled) " ⚠️不一致" else ""
                 emitLine("- $label | App=${toOnOff(appEnabled)} | CarrierConfig=${toOnOff(systemEnabled)}$mismatch")
             }
+            // 「5G NR = ON」对 [1] / [1,2] / [2] 都成立，无法区分 NSA 与 SA。
+            // 排查 5G 无数据必须看原始数组，因此单独打印。
+            val nrArray = configBundle.getIntArray(
+                CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY
+            )
+            val nrModeLabel = NrMode.fromAvailabilities(nrArray)?.let {
+                when (it) {
+                    NrMode.NSA_ONLY -> "NSA only"
+                    NrMode.NSA_AND_SA -> "NSA + SA"
+                    NrMode.SA_ONLY -> "SA only"
+                }
+            } ?: "UNKNOWN"
+            emitLine(
+                "- NR 模式 (carrier_nr_availabilities_int_array) = " +
+                    "${NrMode.formatAvailabilities(nrArray)} ($nrModeLabel)"
+            )
         }
 
         emitLine("[7/8] 网络验证与国家码覆盖状态")

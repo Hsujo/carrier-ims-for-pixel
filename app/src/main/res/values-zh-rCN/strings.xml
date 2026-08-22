@@ -131,6 +131,7 @@
     <string name="nr_mode_sa">仅 SA [2]（实验性）</string>
     <string name="nr_mode_target_sim">目标 SIM</string>
     <string name="nr_mode_requires_5g_nr">请先启用 5G NR 再修改 NR 模式。</string>
+    <string name="nr_mode_reread">重新读取实际值</string>
     <string name="nr_mode_actual">实际：%s</string>
     <string name="nr_mode_mismatch">请求 %1$s，但运营商配置读回 %2$s</string>
     <string name="nr_mode_requires_single_sim">请先选择单张 SIM 卡再修改 NR 模式。</string>
