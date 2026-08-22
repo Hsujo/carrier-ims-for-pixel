@@ -1231,6 +1231,9 @@ class MainActivity : BaseActivity() {
                                     enable5GThreshold = (mapToDump[Feature.FIVE_G_THRESHOLDS]?.data ?: true) as Boolean,
                                     enable5GPlusIcon = (mapToDump[Feature.FIVE_G_PLUS_ICON]?.data ?: true) as Boolean,
                                     enableShow4GForLTE = (mapToDump[Feature.SHOW_4G_FOR_LTE]?.data ?: false) as Boolean,
+                                    nrMode = NrMode.fromStorageKey(
+                                        mapToDump[Feature.NR_MODE]?.data as? String
+                                    ) ?: NrMode.DEFAULT,
                                 )
                                 val snapshotText = buildEditableConfigSnapshotText(
                                     selectedSim = sim,

@@ -66,7 +66,8 @@ class ImsModifier : Instrumentation() {
             enable5GThreshold: Boolean,
             enable5GPlusIcon: Boolean,
             enableShow4GForLTE: Boolean,
-            nrMode: NrMode = NrMode.DEFAULT,
+            // 不给默认值：漏传会静默写出与实际不符的数组，必须由调用方显式决定。
+            nrMode: NrMode,
         ): Bundle {
             val bundle = Bundle()
             // 运营商名称
