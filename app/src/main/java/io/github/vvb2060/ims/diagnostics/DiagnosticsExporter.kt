@@ -42,7 +42,9 @@ object DiagnosticsExporter {
         withContext(Dispatchers.IO) {
             runCatching {
                 val snapshots = SnapshotStore.list(context)
-                require(snapshots.isNotEmpty()) { "没有可导出的快照" }
+                val timeline = MonitorLog(context).file()
+                // 只跑过后台监测、还没有快照时，时间线本身也值得导出。
+                require(snapshots.isNotEmpty() || timeline.isFile) { "没有可导出的快照或监测时间线" }
 
                 val exportDir = File(context.externalCacheDir ?: context.cacheDir, EXPORT_DIR)
                     .apply { mkdirs() }
@@ -70,6 +72,16 @@ object DiagnosticsExporter {
                                 snapshot.name, snapshot.kind, texts
                             )
                         }
+                    }
+
+                    // 后台监测的时间线：自动捕获的快照只是若干个点，
+                    // 时间线才能说明劣化持续了多久、是否周期性发生。
+                    if (timeline.isFile) {
+                        runCatching {
+                            zip.putNextEntry(ZipEntry("monitor_timeline.csv"))
+                            timeline.inputStream().use { it.copyTo(zip) }
+                            zip.closeEntry()
+                        }.onFailure { Log.w(TAG, "failed to add monitor timeline", it) }
                     }
 
                     writeEntry(zip, "metadata.json", buildMetadataJson(snapshots))
@@ -137,6 +149,7 @@ object DiagnosticsExporter {
 
         目录结构：
           metadata.json      导出信息与快照清单
+          monitor_timeline.csv  后台监测的采样时间线（启用过监测时才有）
           comparison.txt     BAD / GOOD 对照（样本齐备时才有内容）
           BAD_5G_*/          故障态快照
           GOOD_*/            正常态快照

@@ -7,6 +7,10 @@
          绑定到它；仅靠枚举 allNetworks 去绑定会被 netd 拒绝（EPERM）。普通权限。 -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 后台持续监测需要前台服务；仅做只读采样，不修改任何系统配置。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="io.github.vvb2060.ims.Application"
@@ -38,6 +42,15 @@
             android:name="io.github.vvb2060.ims.ui.DiagnosticsActivity"
             android:exported="false"
             android:theme="@style/Theme.TurbolIms" />
+
+        <service
+            android:name="io.github.vvb2060.ims.diagnostics.MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous cellular link diagnostics requested by the user" />
+        </service>
 
         <service
             android:name="io.github.vvb2060.ims.tiles.SIM1VoLTETileService"

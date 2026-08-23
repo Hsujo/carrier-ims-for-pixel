@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.vvb2060.ims.R
+import io.github.vvb2060.ims.diagnostics.MonitorLog
+import io.github.vvb2060.ims.diagnostics.MonitorService
 import io.github.vvb2060.ims.diagnostics.SnapshotKind
 import io.github.vvb2060.ims.model.SimSelection
 import io.github.vvb2060.ims.viewmodel.DiagnosticsViewModel
@@ -97,6 +99,10 @@ class DiagnosticsActivity : BaseActivity() {
                 LiveStatusCard(
                     state = state,
                     onRefresh = { viewModel.refreshLiveStatus(subId) },
+                )
+                MonitorCard(
+                    subId = subId,
+                    onChanged = { viewModel.refreshSnapshots() },
                 )
                 CaptureCard(
                     capturing = state.capturing,
@@ -248,6 +254,76 @@ class DiagnosticsActivity : BaseActivity() {
         }
     }
 
+
+    /**
+     * 后台持续监测入口。
+     *
+     * 人工点击会错过窗口，因此这里提供自动采样与异常自动抓取；
+     * 但必须由用户显式启动、可随时停止，且明确告知存储与耗电代价。
+     */
+    @Composable
+    private fun MonitorCard(subId: Int, onChanged: () -> Unit) {
+        val context = LocalContext.current
+        val running by MonitorService.running.collectAsStateWithLifecycle()
+        val samples by MonitorService.sampleCount.collectAsStateWithLifecycle()
+        val captures by MonitorService.autoCaptures.collectAsStateWithLifecycle()
+        val trigger by MonitorService.lastTrigger.collectAsStateWithLifecycle()
+
+        LaunchedEffect(captures) { if (captures > 0) onChanged() }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.monitor_title),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    stringResource(R.string.monitor_desc),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Text(
+                    stringResource(R.string.monitor_state, samples, captures),
+                    fontSize = 12.sp,
+                )
+                trigger?.let {
+                    Text(
+                        stringResource(R.string.monitor_last_trigger, it),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Button(
+                    onClick = {
+                        if (running) {
+                            MonitorService.stop(context)
+                        } else if (subId >= 0) {
+                            MonitorService.start(context, subId)
+                        } else {
+                            Toast.makeText(context, R.string.select_single_sim, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.height(40.dp),
+                ) {
+                    Text(
+                        stringResource(
+                            if (running) R.string.monitor_stop_action else R.string.monitor_start
+                        )
+                    )
+                }
+                Text(
+                    stringResource(R.string.monitor_bounded, MonitorLog.MAX_SAMPLES),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+
     @Composable
     private fun CaptureCard(
         capturing: Boolean,
@@ -337,7 +413,7 @@ class DiagnosticsActivity : BaseActivity() {
                 Spacer(modifier = Modifier.height(4.dp))
                 Button(
                     onClick = onExport,
-                    enabled = !exporting && snapshots.isNotEmpty(),
+                    enabled = !exporting,
                     modifier = Modifier.height(40.dp),
                 ) {
                     Text(stringResource(R.string.diagnostics_export))

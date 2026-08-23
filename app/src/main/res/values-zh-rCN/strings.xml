@@ -353,4 +353,15 @@
     <string name="diagnostics_open">5G 数据诊断</string>
     <string name="diagnostics_export">导出诊断包</string>
     <string name="diagnostics_export_privacy">原始 dumpsys 与 radio 日志完整保留，可能含 IMSI、ICCID、IMEI 等标识；summary.txt 与 metadata.txt 不含。对外分享前请自行确认。</string>
+    <string name="monitor_channel_name">链路监测</string>
+    <string name="monitor_channel_desc">由诊断页启动的蜂窝链路持续采样。</string>
+    <string name="monitor_notification_title">正在监测蜂窝链路</string>
+    <string name="monitor_stop">停止</string>
+    <string name="monitor_title">后台持续监测</string>
+    <string name="monitor_desc">每 15 秒采样一次写入有界时间线，判定异常时自动抓取完整快照 —— 不必再靠手动点击去追那几秒的窗口。</string>
+    <string name="monitor_start">开始监测</string>
+    <string name="monitor_stop_action">停止监测</string>
+    <string name="monitor_state">样本 %1$d 条 · 自动捕获 %2$d 次</string>
+    <string name="monitor_last_trigger">最近触发：%s</string>
+    <string name="monitor_bounded">环形缓冲上限 %d 条（约 12 小时），超出即丢弃最旧样本，存储不会无限增长。</string>
 </resources>

@@ -353,4 +353,15 @@
     <string name="diagnostics_open">5G data diagnostics</string>
     <string name="diagnostics_export">Export diagnostics ZIP</string>
     <string name="diagnostics_export_privacy">Raw dumpsys and radio logs are kept in full and may contain IMSI, ICCID or IMEI. summary.txt and metadata.txt do not. Check before sharing outside.</string>
+    <string name="monitor_channel_name">Link monitoring</string>
+    <string name="monitor_channel_desc">Ongoing cellular link sampling started from the diagnostics page.</string>
+    <string name="monitor_notification_title">Monitoring cellular link</string>
+    <string name="monitor_stop">Stop</string>
+    <string name="monitor_title">Background monitoring</string>
+    <string name="monitor_desc">Samples the link every 15s into a bounded timeline and auto-captures a full snapshot when it detects a fault, so you do not have to catch the moment by hand.</string>
+    <string name="monitor_start">Start monitoring</string>
+    <string name="monitor_stop_action">Stop monitoring</string>
+    <string name="monitor_state">Samples %1$d · auto-captured %2$d</string>
+    <string name="monitor_last_trigger">Last trigger: %s</string>
+    <string name="monitor_bounded">Ring buffer capped at %d samples (~12h); the oldest are dropped, storage never grows without bound.</string>
 </resources>
