@@ -17,6 +17,14 @@ data class MonitorSample(
     /** 服务小区的 RSRP / SINR；读不到时为 null。 */
     val rsrp: Int?,
     val sinr: Int?,
+    /**
+     * 采样时刻的设备热状态（PowerManager.getCurrentThermalStatus 的名称）。
+     *
+     * 实测 radio 日志里热缓解一直在下发 SET_DATA_THROTTLING，因此必须能验证
+     * 「卡顿是不是热降频引起的」。之前只能靠 radio 日志的时间窗反推，
+     * 140 条样本里只有 110 条落在日志覆盖范围内，其余无从判断。
+     */
+    val thermal: String,
     val note: String,
 ) {
     fun toCsvRow(): String = listOf(
@@ -29,6 +37,7 @@ data class MonitorSample(
         probeOk.toString(),
         rsrp?.toString() ?: "",
         sinr?.toString() ?: "",
+        thermal,
         note.replace(',', ';').replace('\n', ' '),
     ).joinToString(",")
 
@@ -37,7 +46,7 @@ data class MonitorSample(
         // 实测证明两者不相关（-88dBm/SINR21 时抖动 4681ms），
         // 而当初时间线没有信号列，只能逐个打开快照才发现。
         const val CSV_HEADER =
-            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,note"
+            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,thermal,note"
     }
 }
 

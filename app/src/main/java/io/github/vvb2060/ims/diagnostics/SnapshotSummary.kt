@@ -66,6 +66,10 @@ data class SnapshotSummary(
             "latency_verdict",
             "probe_verdict",
             "nr_mode_config",
+            // 热状态与 modem 固件版本进摘要：BAD/GOOD 对照时最需要一眼看到的
+            // 就是「两次采样是不是同一套固件、当时热不热」。
+            "thermal_status",
+            "baseband",
             "target_sub_id",
             "probed_sub_id",
             "registry_scope",
@@ -225,6 +229,8 @@ data class SnapshotSummary(
             snapshot.metadata["carrier_nr_availabilities_int_array"]?.let {
                 fields["nr_mode_config"] = it
             }
+            snapshot.metadata["thermal_status"]?.let { fields["thermal_status"] = it }
+            snapshot.metadata["baseband"]?.let { fields["baseband"] = it }
 
             val probe = snapshot.probe
             if (probe != null) {

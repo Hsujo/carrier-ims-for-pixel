@@ -70,6 +70,7 @@ class MonitorService : Service() {
                     rat = "", validated = "", ipv4 = "",
                     rttMs = null, jitterMs = null, probeOk = false,
                     rsrp = null, sinr = null,
+                    thermal = readThermal(),
                     note = "sample_error:${it.javaClass.simpleName}",
                 )
             }
@@ -112,6 +113,7 @@ class MonitorService : Service() {
             probeOk = probe.ipReachability.ok,
             rsrp = signal?.first,
             sinr = signal?.second,
+            thermal = readThermal(),
             note = probe.verdict.substringBefore(":"),
         )
     }
@@ -140,6 +142,27 @@ class MonitorService : Service() {
         }
         null
     }.getOrNull()
+
+    /**
+     * 读取设备热状态。
+     *
+     * 真机 radio 日志里热缓解一直在下发 SET_DATA_THROTTLING（0/1/2 反复切换），
+     * 所以「卡是不是热降频造成的」必须能直接验证，而不是靠 radio 日志时间窗反推。
+     * 该 API 无需权限、开销极低，适合按采样频率调用。
+     */
+    private fun readThermal(): String = runCatching {
+        when (val status = getSystemService(android.os.PowerManager::class.java)
+            ?.currentThermalStatus ?: return "") {
+            android.os.PowerManager.THERMAL_STATUS_NONE -> "NONE"
+            android.os.PowerManager.THERMAL_STATUS_LIGHT -> "LIGHT"
+            android.os.PowerManager.THERMAL_STATUS_MODERATE -> "MODERATE"
+            android.os.PowerManager.THERMAL_STATUS_SEVERE -> "SEVERE"
+            android.os.PowerManager.THERMAL_STATUS_CRITICAL -> "CRITICAL"
+            android.os.PowerManager.THERMAL_STATUS_EMERGENCY -> "EMERGENCY"
+            android.os.PowerManager.THERMAL_STATUS_SHUTDOWN -> "SHUTDOWN"
+            else -> "STATUS_$status"
+        }
+    }.getOrDefault("")
 
     private suspend fun captureOnAnomaly(reason: String) {
         val sim = runCatching { ShizukuProvider.readSimInfoList(this) }
@@ -194,6 +217,9 @@ class MonitorService : Service() {
             sample.rsrp?.let { append(" · ").append(it).append("dBm") }
             append(" · RTT ").append(sample.rttMs?.toString() ?: "-").append("ms")
             append(" · 抖动 ").append(sample.jitterMs?.toString() ?: "-").append("ms")
+            if (sample.thermal.isNotBlank() && sample.thermal != "NONE") {
+                append(" · 热 ").append(sample.thermal)
+            }
             append(" · 样本 ").append(log.size())
             if (reason != null) append(" · 已捕获")
         }

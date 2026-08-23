@@ -76,6 +76,10 @@ object SnapshotCollector {
             "connectivity" to DUMPSYS_MAX_BYTES,
             "carrier_config" to DUMPSYS_MAX_BYTES,
             "isub" to SMALL_MAX_BYTES,
+            // 热缓解会直接对 modem 下发 SET_DATA_THROTTLING（真机 radio 日志里
+            // 0/1/2 反复切换），因此现场必须留下当时的热状态与各温度点，
+            // 否则只能从 radio 日志的时间窗反推。
+            "thermalservice" to SMALL_MAX_BYTES,
         )
         for ((svc, cap) in dumpsysTargets) {
             onProgress("dumpsys $svc")
@@ -146,7 +150,18 @@ object SnapshotCollector {
         meta["android_release"] = Build.VERSION.RELEASE
         meta["android_sdk"] = Build.VERSION.SDK_INT.toString()
         meta["build_display"] = Build.DISPLAY
+        meta["build_fingerprint"] = Build.FINGERPRINT
         meta["security_patch"] = Build.VERSION.SECURITY_PATCH
+        // 每次大版本 OTA 都会一并刷新 modem 固件，而 SA 的选网与上行功控就在
+        // 固件里。没有这一项就无法回答「问题是不是随系统更新一起来的」，
+        // 先前的导出正是缺了它。
+        meta["baseband"] = runCatching { Build.getRadioVersion() }
+            .getOrNull()?.ifBlank { null } ?: "UNKNOWN"
+        // 与 dumpsys thermalservice 互为佐证：即使 dumpsys 失败也留下一个数值。
+        meta["thermal_status"] = runCatching {
+            context.getSystemService(android.os.PowerManager::class.java)
+                ?.currentThermalStatus?.toString() ?: "UNKNOWN"
+        }.getOrElse { "UNKNOWN (${it.javaClass.simpleName})" }
         meta["taken_at"] = SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date())
 
         // 双卡时「哪张卡在承载数据」直接决定该看谁的状态。
@@ -171,6 +186,10 @@ object SnapshotCollector {
             "gsm.operator.numeric",
             "gsm.operator.alpha",
             "gsm.sim.state",
+            // Build.getRadioVersion() 读的就是它，但双 modem / 厂商定制下两者
+            // 可能不一致，因此原样再存一份。
+            "gsm.version.baseband",
+            "ro.build.version.incremental",
         ).forEach { key ->
             meta["prop.$key"] = runCatching { ShizukuSystemProperties.get(key, "") }
                 .getOrElse { "(read failed: ${it.javaClass.simpleName})" }

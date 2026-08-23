@@ -126,6 +126,14 @@ object DiagnosticsExporter {
         root.put("android_release", android.os.Build.VERSION.RELEASE)
         root.put("android_sdk", android.os.Build.VERSION.SDK_INT)
         root.put("build_display", android.os.Build.DISPLAY)
+        root.put("build_fingerprint", android.os.Build.FINGERPRINT)
+        // 记录 modem 固件版本：系统大版本升级会一并刷新它，
+        // 而「问题是不是随升级出现的」只有留下这一项才能事后比对。
+        root.put(
+            "baseband",
+            runCatching { android.os.Build.getRadioVersion() }.getOrNull()?.ifBlank { null }
+                ?: "UNKNOWN"
+        )
         root.put("exported_at", SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date()))
 
         val array = JSONArray()
@@ -150,13 +158,15 @@ object DiagnosticsExporter {
         目录结构：
           metadata.json      导出信息与快照清单
           monitor_timeline.csv  后台监测的采样时间线（启用过监测时才有）
+                             含 rsrp/sinr/thermal 列，可直接判断卡顿
+                             与信号强度、热降频是否相关
           comparison.txt     BAD / GOOD 对照（样本齐备时才有内容）
           BAD_5G_*/          故障态快照
           GOOD_*/            正常态快照
             metadata.txt     设备、SIM、CarrierConfig 关键项
             summary.txt      解析出的机器可读摘要
             probes.txt       链路状态与连通性探测
-            dumpsys_*.txt    原始 dumpsys 输出
+            dumpsys_*.txt    原始 dumpsys 输出（含 thermalservice 热状态）
             ip_*.txt         接口与路由
             logcat_*.txt     radio 日志（有界）
 
