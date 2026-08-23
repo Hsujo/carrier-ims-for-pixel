@@ -60,6 +60,10 @@ data class SnapshotSummary(
             "dns",
             "ip_probe",
             "dns_probe",
+            "rtt_min_ms",
+            "rtt_max_ms",
+            "rtt_jitter_ms",
+            "latency_verdict",
             "probe_verdict",
             "nr_mode_config",
             "target_sub_id",
@@ -225,6 +229,12 @@ data class SnapshotSummary(
                 fields["dns"] = link.dnsServers.joinToString().ifBlank { "(none)" }
                 fields["ip_probe"] = "${probe.ipReachability.successes}/${probe.ipReachability.attempts}"
                 fields["dns_probe"] = "${probe.dnsResolution.successes}/${probe.dnsResolution.attempts}"
+                probe.latency?.let { lat ->
+                    fields["rtt_min_ms"] = lat.minMs?.toString() ?: UNKNOWN
+                    fields["rtt_max_ms"] = lat.maxMs?.toString() ?: UNKNOWN
+                    fields["rtt_jitter_ms"] = lat.jitterMs?.toString() ?: UNKNOWN
+                    fields["latency_verdict"] = lat.verdict
+                }
                 fields["probe_verdict"] = probe.verdict.substringBefore(":")
                 fields["target_sub_id"] = probe.targetSubId?.toString() ?: UNKNOWN
                 fields["probed_sub_id"] = probe.probedSubId?.toString() ?: UNKNOWN

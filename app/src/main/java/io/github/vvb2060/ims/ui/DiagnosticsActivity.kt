@@ -206,6 +206,12 @@ class DiagnosticsActivity : BaseActivity() {
                         "v4=${link.hasDefaultRouteV4} v6=${link.hasDefaultRouteV6}"
                     )
                     KeyValueRow("DNS", link.dnsServers.ifEmpty { listOf("(none)") }.joinToString())
+                    probe.latency?.let { lat ->
+                        KeyValueRow(
+                            "RTT / 抖动",
+                            "${lat.minMs ?: "-"}~${lat.maxMs ?: "-"}ms / ${lat.jitterMs ?: "-"}ms"
+                        )
+                    }
                     val boundNote = if (probe.ipReachability.boundToCellular) "" else " (默认路由)"
                     KeyValueRow(
                         "IP 可达",

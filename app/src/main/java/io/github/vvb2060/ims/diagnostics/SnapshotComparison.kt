@@ -28,6 +28,10 @@ object SnapshotComparison {
         "probe_verdict",
         "reject_cause",
         // 弱信号导致的「连接着但不通」，只有射频指标能区分。
+        // 抖动是「连得上但卡」的指纹，只看通断会漏掉。
+        "rtt_jitter_ms",
+        "rtt_max_ms",
+        "latency_verdict",
         "signal_quality",
         "lte_rsrp",
         "lte_rssnr",

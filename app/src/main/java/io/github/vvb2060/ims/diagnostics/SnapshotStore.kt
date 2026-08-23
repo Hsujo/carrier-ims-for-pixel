@@ -128,6 +128,13 @@ object SnapshotStore {
         appendLine()
         appendLine("capabilities: ${link.capabilities ?: "UNKNOWN"}")
         appendLine()
+        probe.latency?.let { lat ->
+            appendLine("latency: target=${lat.target} verdict=${lat.verdict}")
+            appendLine("  samples_ms=${lat.samples.joinToString()}")
+            appendLine("  min=${lat.minMs} avg=${lat.avgMs} max=${lat.maxMs} jitter=${lat.jitterMs}")
+            appendLine("  failures=${lat.failures} bound_to_cellular=${lat.boundToCellular}")
+            appendLine()
+        }
         listOf(probe.ipReachability, probe.dnsResolution).forEach { p ->
             appendLine(
                 "${p.label}: target=${p.target} ${p.successes}/${p.attempts} " +

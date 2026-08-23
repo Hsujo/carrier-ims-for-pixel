@@ -57,6 +57,10 @@ object NetworkProbe {
     private val DNS_TARGETS = listOf("www.baidu.com", "www.qq.com")
     private const val DNS_PORT = 443
 
+    /** 时延采样次数与单次上限：够看出尾部发散，又不至于让现场等太久。 */
+    private const val LATENCY_SAMPLES = 6
+    private const val LATENCY_TIMEOUT_MILLIS = 6_000
+
     /** 申请蜂窝网络的等待上限。 */
     private const val REQUEST_NETWORK_TIMEOUT_MILLIS = 8_000
 
@@ -99,10 +103,45 @@ object NetworkProbe {
         val ok: Boolean get() = successes > 0
     }
 
+    /**
+     * 时延分布。
+     *
+     * 只测通断无法发现 NSA 下的典型劣化：NR 腿质量差时反复重传再回落 LTE，
+     * 连接照样成功、延迟中位数也正常，但尾部延迟极度发散
+     * （实测 5G 抖动 4663ms vs 4G 46.9ms）。抖动才是这类问题的指纹。
+     */
+    data class LatencyResult(
+        val target: String,
+        val samples: List<Long>,
+        val failures: Int,
+        val boundToCellular: Boolean,
+    ) {
+        val minMs: Long? get() = samples.minOrNull()
+        val maxMs: Long? get() = samples.maxOrNull()
+        val avgMs: Long? get() = samples.takeIf { it.isNotEmpty() }?.average()?.toLong()
+
+        /** 极差：最能反映「偶发的秒级卡顿」，比标准差更贴近体感。 */
+        val jitterMs: Long? get() = if (samples.size >= 2) (maxMs!! - minMs!!) else null
+
+        val verdict: String
+            get() {
+                val j = jitterMs ?: return UNKNOWN_TEXT
+                return when {
+                    j >= 2000 -> "SEVERE_JITTER (${j}ms，存在秒级停顿)"
+                    j >= 500 -> "HIGH_JITTER (${j}ms)"
+                    j >= 150 -> "MODERATE_JITTER (${j}ms)"
+                    else -> "STABLE (${j}ms)"
+                }
+            }
+    }
+
+    private const val UNKNOWN_TEXT = "UNKNOWN"
+
     data class Result(
         val link: LinkSnapshot,
         val ipReachability: ProbeResult,
         val dnsResolution: ProbeResult,
+        val latency: LatencyResult?,
         val verdict: String,
         /** 目标 subId 与实际被探测网络的 subId，不一致时结论不属于目标卡。 */
         val targetSubId: Int?,
@@ -140,16 +179,19 @@ object NetworkProbe {
             val cellular = requested ?: lookup.getOrNull()
             val probedSubId = cellular?.let { subIdOf(cm, it) }
             // 两类探测互不依赖，并行执行以缩短现场等待时间。
-            val (ipProbe, dnsProbe) = coroutineScope {
+            val triple = coroutineScope {
                 val ip = async { probeIpReachability(cellular) }
                 val dns = async { probeDnsResolution(cellular) }
-                ip.await() to dns.await()
+                val lat = async { probeLatency(cellular) }
+                Triple(ip.await(), dns.await(), lat.await())
             }
+            val (ipProbe, dnsProbe, latency) = triple
             Result(
                 link = link,
                 ipReachability = ipProbe,
                 dnsResolution = dnsProbe,
-                verdict = buildVerdict(link, ipProbe, dnsProbe, targetSubId, probedSubId),
+                latency = latency,
+                verdict = buildVerdict(link, ipProbe, dnsProbe, latency, targetSubId, probedSubId),
                 targetSubId = targetSubId,
                 probedSubId = probedSubId,
             )
@@ -397,10 +439,40 @@ object NetworkProbe {
         )
     }
 
+    /**
+     * 连续多次连接同一目标，记录每次 RTT。
+     *
+     * 样本数取 6：既能看出尾部发散，又把最坏耗时控制在可接受范围内
+     * （与其他探测并行执行）。
+     */
+    private fun probeLatency(network: Network?): LatencyResult {
+        val target = IP_TARGETS.first()
+        val samples = mutableListOf<Long>()
+        var failures = 0
+        val address = runCatching { InetAddress.getByName(target.first) }.getOrNull()
+            ?: return LatencyResult(target.first, emptyList(), LATENCY_SAMPLES, network != null)
+
+        repeat(LATENCY_SAMPLES) {
+            val started = System.nanoTime()
+            val error = tryConnect(network, address, IP_PORTS.first(), LATENCY_TIMEOUT_MILLIS)
+            if (error == null) {
+                samples += (System.nanoTime() - started) / 1_000_000
+            } else {
+                failures++
+            }
+        }
+        return LatencyResult(target.first, samples, failures, network != null)
+    }
+
     /** @return null 表示连通；否则返回失败原因。 */
-    private fun tryConnect(network: Network?, address: InetAddress, port: Int): String? = try {
+    private fun tryConnect(
+        network: Network?,
+        address: InetAddress,
+        port: Int,
+        timeoutMillis: Int = CONNECT_TIMEOUT_MILLIS,
+    ): String? = try {
         val socket = network?.socketFactory?.createSocket() ?: Socket()
-        socket.use { it.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MILLIS) }
+        socket.use { it.connect(InetSocketAddress(address, port), timeoutMillis) }
         null
     } catch (t: Throwable) {
         describe(t)
@@ -413,6 +485,7 @@ object NetworkProbe {
         link: LinkSnapshot,
         ip: ProbeResult,
         dns: ProbeResult,
+        latency: LatencyResult?,
         targetSubId: Int?,
         probedSubId: Int?,
     ): String = when {
@@ -467,6 +540,17 @@ object NetworkProbe {
         link.validated == false ->
             "NOT_VALIDATED: 链路可用但 Android 未判定 VALIDATED"
 
-        else -> "OK: 蜂窝链路各项检查通过"
+        // 全部连得上但尾部延迟发散：NSA 下 NR 腿质量差的典型表现，
+        // 只看通断会漏掉，而这恰恰是「满格却卡」的直接成因。
+        (latency?.jitterMs ?: 0L) >= 2000L ->
+            "USABLE_BUT_SEVERE_JITTER: 连接均成功，但抖动 ${latency?.jitterMs}ms 存在秒级停顿" +
+                "（RTT ${latency?.minMs}~${latency?.maxMs}ms）"
+
+        (latency?.jitterMs ?: 0L) >= 500L ->
+            "USABLE_BUT_HIGH_JITTER: 连接均成功，但抖动 ${latency?.jitterMs}ms" +
+                "（RTT ${latency?.minMs}~${latency?.maxMs}ms）"
+
+        else -> "OK: 蜂窝链路各项检查通过" +
+            (latency?.jitterMs?.let { "（RTT ${latency.minMs}~${latency.maxMs}ms，抖动 ${it}ms）" } ?: "")
     }
 }
