@@ -27,6 +27,11 @@ object SnapshotComparison {
         "dns_probe",
         "probe_verdict",
         "reject_cause",
+        // 弱信号导致的「连接着但不通」，只有射频指标能区分。
+        "signal_quality",
+        "lte_rsrp",
+        "lte_rssnr",
+        "is_endc_available",
     )
 
     data class FieldDiff(

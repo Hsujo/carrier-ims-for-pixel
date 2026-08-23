@@ -39,6 +39,13 @@ data class SnapshotSummary(
             "is_nr_available",
             "is_endc_available",
             "is_dc_nr_restricted",
+            "lte_rsrp",
+            "lte_rsrq",
+            "lte_rssnr",
+            "lte_level",
+            "nr_ss_rsrp",
+            "nr_ss_sinr",
+            "signal_quality",
             "data_connection_state",
             "data_available",
             "reject_cause",
@@ -104,6 +111,14 @@ data class SnapshotSummary(
                 """\bmDataConnectionState=(\S+)""",
                 """\bdataConnectionState=(\S+)""",
             ),
+            // 只取 mSignalStrength= 这一条当前值；registry 里还有历史记录，
+            // 混进去会让「现在信号如何」变得不可判读。
+            "lte_rsrp" to listOf("""mSignalStrength=[^\n]*?mLte=CellSignalStrengthLte:[^,]*?\brsrp=(-?\d+)"""),
+            "lte_rsrq" to listOf("""mSignalStrength=[^\n]*?mLte=CellSignalStrengthLte:[^,]*?\brsrq=(-?\d+)"""),
+            "lte_rssnr" to listOf("""mSignalStrength=[^\n]*?mLte=CellSignalStrengthLte:[^,]*?\brssnr=(-?\d+)"""),
+            "lte_level" to listOf("""mSignalStrength=[^\n]*?mLte=CellSignalStrengthLte:[^,]*?\blevel=(\d+)"""),
+            "nr_ss_rsrp" to listOf("""mNr=CellSignalStrengthNr:\{[^}]*?ssRsrp\s*=\s*(-?\d+)"""),
+            "nr_ss_sinr" to listOf("""mNr=CellSignalStrengthNr:\{[^}]*?ssSinr\s*=\s*(-?\d+)"""),
             "reject_cause" to listOf(
                 """\brejectCause=(\S+)""",
                 """\bmRejectCause=(\S+)""",
@@ -176,6 +191,8 @@ data class SnapshotSummary(
                 fields["rat"] = "$ratFallback (from connectivity, may be stale)"
             }
 
+            fields["signal_quality"] = gradeSignal(fields["lte_rsrp"], fields["lte_rssnr"])
+
             // NSA / SA 线索：NR 已连接但注册在 LTE 上，是 EN-DC（NSA）的典型特征。
             fields["nsa_sa_clue"] = deriveNsaSaClue(fields["nr_state"], fields["rat"])
 
@@ -231,6 +248,33 @@ data class SnapshotSummary(
             return SnapshotSummary(name, kind, fields)
         }
 
+        /**
+         * 把 RSRP / SINR 归纳成一句人能直接用的判断。
+         *
+         * PDU session 在弱信号下往往不会拆除，IP、路由、DNS 全都照旧，
+         * Android 的 VALIDATED 也是上次成功检测的粘滞结果 ——
+         * 于是界面显示「已连接」而实际收发不通。此时只有射频指标能说明问题。
+         */
+        private fun gradeSignal(rsrpRaw: String?, sinrRaw: String?): String {
+            val rsrp = rsrpRaw?.toIntOrNull()
+            val sinr = sinrRaw?.toIntOrNull()
+            // 2147483647 是 Android 的「无效值」占位。
+            if (rsrp == null || rsrp == Int.MAX_VALUE) return UNKNOWN
+            val quality = when {
+                rsrp <= -120 -> "VERY_POOR"
+                rsrp <= -110 -> "POOR"
+                rsrp <= -100 -> "FAIR"
+                else -> "GOOD"
+            }
+            val sinrNote = when {
+                sinr == null || sinr == Int.MAX_VALUE -> ""
+                sinr < 0 -> "，SINR 为负（噪声高于信号）"
+                sinr < 10 -> "，SINR 偏低"
+                else -> ""
+            }
+            return "$quality (rsrp=${rsrp}dBm$sinrNote)"
+        }
+
         private fun deriveNsaSaClue(nrState: String?, rat: String?): String {
             if (nrState == null || nrState == UNKNOWN) {
                 // 没有 nrState 时，仅凭数据 RAT 也能给出粗判，但必须说明依据较弱。
@@ -275,15 +319,22 @@ data class SnapshotSummary(
                 val end = if (index + 1 < markers.size) markers[index + 1].range.first else text.length
                 match.groupValues[1].toIntOrNull() to text.substring(start, end)
             }
-            // 优先按 subId 命中，其次按槽位号，最后放弃裁剪但明确标注。
-            if (subId != null) {
-                sections.firstOrNull { it.second.contains("subId=$subId") }?.let {
-                    return it.second to "scoped to subId=$subId"
-                }
-            }
+
+            // Phone Id 直接对应卡槽，是可靠映射，必须优先。
+            //
+            // 不能按 "subId=N" 子串匹配：真机上联通那段完全不含 subId=，
+            // 而另一段列出了包括 2 在内的一串 subId，于是会命中错误的卡，
+            // 把另一张卡的漫游状态安到目标卡头上（本工具已犯过一次）。
             if (slotIndex != null) {
                 sections.firstOrNull { it.first == slotIndex }?.let {
-                    return it.second to "scoped to Phone Id=$slotIndex (by slot)"
+                    return it.second to "scoped to Phone Id=$slotIndex (slot)"
+                }
+            }
+            if (subId != null) {
+                val hits = sections.filter { it.second.contains("subId=$subId") }
+                // 只有唯一命中才可信；多段都提到同一个 subId 说明这不是归属标识。
+                if (hits.size == 1) {
+                    return hits.first().second to "scoped to subId=$subId (unique match)"
                 }
             }
             return text to "could not scope to target SIM; fields may come from another SIM"

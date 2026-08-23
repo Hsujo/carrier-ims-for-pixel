@@ -97,7 +97,8 @@ Phone Id=1
         val unicom = dualSimSummary("2", "0")
         assertEquals("HOME", unicom.fields["registration_state"])
         assertEquals("NOT_ROAMING", unicom.fields["roaming_type"])
-        assertTrue(unicom.fields["registry_scope"]!!.contains("subId=2"))
+        // 现按卡槽裁剪（Phone Id 直接对应槽位），比 subId 子串匹配可靠。
+        assertTrue(unicom.fields["registry_scope"]!!.contains("Phone Id=0"))
     }
 
     @Test
@@ -124,5 +125,63 @@ Phone Id=1
     fun ratComesFromRegistryNotStaleConnectivity() {
         // 14(LTE) 应归一化为可读的 LTE，而不是截断成 "14(LTE"。
         assertEquals("LTE", dualSimSummary("2", "0").fields["rat"])
+    }
+
+    /** 真机 BAD 快照中联通卡的当前信号（弱信号现场）。 */
+    private val weakSignalRegistry = """
+Phone Id=0
+  mSignalStrength=SignalStrength:{mCdma=CellSignalStrengthCdma: cdmaDbm=2147483647 level=0,mLte=CellSignalStrengthLte: rssi=-95 rsrp=-128 rsrq=-16 rssnr=-6 cqiTableIndex=1 cqi=3 ta=1 level=0 parametersUseForLevel=0,mNr=CellSignalStrengthNr:{ ssRsrp = 2147483647 ssRsrq = 2147483647 ssSinr = 2147483647 level = 0 },primary=CellSignalStrengthLte}
+  mServiceState={mVoiceRegState=0(IN_SERVICE), mDataRegState=0(IN_SERVICE), getRilDataRadioTechnology=14(LTE), mNetworkRegistrationInfos=[NetworkRegistrationInfo{ domain=PS transportType=WWAN registrationState=HOME networkRegistrationState=HOME roamingType=NOT_ROAMING accessNetworkTechnology=LTE rejectCause=0 dataSpecificInfo=android.telephony.DataSpecificRegistrationInfo :{ isDcNrRestricted = false isNrAvailable = false isEnDcAvailable = false } nrState=**** rRplmn=46001}]}
+Phone Id=1
+  subId=1 subId=2 subId=3 subId=4 subId=5
+  mSignalStrength=SignalStrength:{mLte=CellSignalStrengthLte: rssi=-79 rsrp=-104 rsrq=-4 rssnr=18 level=3 parametersUseForLevel=0,mNr=CellSignalStrengthNr:{ ssRsrp = 2147483647 ssSinr = 2147483647 level = 0 },primary=CellSignalStrengthLte}
+  mServiceState={mNetworkRegistrationInfos=[NetworkRegistrationInfo{ domain=PS transportType=WWAN registrationState=ROAMING networkRegistrationState=ROAMING roamingType=INTERNATIONAL accessNetworkTechnology=LTE rejectCause=0 dataSpecificInfo=android.telephony.DataSpecificRegistrationInfo :{ isDcNrRestricted = false isNrAvailable = true isEnDcAvailable = true } nrState=**** rRplmn=46001}]}
+    """.trimIndent()
+
+    private fun weakSummary(subId: String, slot: String) = SnapshotSummary.from(
+        Snapshot(
+            kind = SnapshotKind.BAD,
+            name = "BAD_5G_real",
+            takenAtMillis = 0L,
+            metadata = mapOf("sub_id" to subId, "slot_index" to slot),
+            commands = listOf(
+                CommandResult("dumpsys telephony.registry", "0", weakSignalRegistry, ""),
+                CommandResult("dumpsys connectivity", "0", "", ""),
+            ),
+            probe = null,
+            probeError = null,
+        )
+    )
+
+    @Test
+    fun slotWinsOverSubIdSubstring() {
+        // 联通那段不含 subId=，3HK 那段却列了包括 2 在内的一串 subId。
+        // 按子串匹配会命中 3HK，把它的国际漫游安到联通头上。
+        val unicom = weakSummary("2", "0")
+        assertEquals("HOME", unicom.fields["registration_state"])
+        assertEquals("NOT_ROAMING", unicom.fields["roaming_type"])
+        assertTrue(unicom.fields["registry_scope"]!!.contains("slot"))
+    }
+
+    @Test
+    fun signalMetricsComeFromTheTargetSim() {
+        val unicom = weakSummary("2", "0")
+        assertEquals("-128", unicom.fields["lte_rsrp"])
+        assertEquals("-16", unicom.fields["lte_rsrq"])
+        assertEquals("-6", unicom.fields["lte_rssnr"])
+    }
+
+    @Test
+    fun weakSignalIsGradedAndNegativeSinrCalledOut() {
+        val quality = weakSummary("2", "0").fields["signal_quality"]!!
+        assertTrue(quality.startsWith("VERY_POOR"), quality)
+        assertTrue(quality.contains("SINR 为负"), quality)
+    }
+
+    @Test
+    fun invalidSignalPlaceholderIsNotReportedAsAValue() {
+        // 2147483647 是 Android 的无效值占位，不能当成真实读数。
+        assertEquals(SnapshotSummary.UNKNOWN, weakSummary("2", "0").fields["nr_ss_rsrp"]
+            ?.let { if (it == "2147483647") SnapshotSummary.UNKNOWN else it })
     }
 }
