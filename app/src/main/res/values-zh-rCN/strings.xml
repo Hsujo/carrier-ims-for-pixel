@@ -358,10 +358,10 @@
     <string name="monitor_notification_title">正在监测蜂窝链路</string>
     <string name="monitor_stop">停止</string>
     <string name="monitor_title">后台持续监测</string>
-    <string name="monitor_desc">每 15 秒采样一次写入有界时间线，判定异常时自动抓取完整快照 —— 不必再靠手动点击去追那几秒的窗口。</string>
+    <string name="monitor_desc">每 20 秒定频采样写入有界时间线；一旦判定异常，自动转为 5 秒一次连采一分钟并抓取完整快照 —— 不必再靠手动点击去追那几秒的窗口。</string>
     <string name="monitor_start">开始监测</string>
     <string name="monitor_stop_action">停止监测</string>
     <string name="monitor_state">样本 %1$d 条 · 自动捕获 %2$d 次</string>
     <string name="monitor_last_trigger">最近触发：%s</string>
-    <string name="monitor_bounded">环形缓冲上限 %d 条（约 12 小时），超出即丢弃最旧样本，存储不会无限增长。</string>
+    <string name="monitor_bounded">环形缓冲上限 %d 条（常态节奏约 16 小时），超出即丢弃最旧样本，存储不会无限增长。</string>
 </resources>

@@ -358,10 +358,10 @@
     <string name="monitor_notification_title">Monitoring cellular link</string>
     <string name="monitor_stop">Stop</string>
     <string name="monitor_title">Background monitoring</string>
-    <string name="monitor_desc">Samples the link every 15s into a bounded timeline and auto-captures a full snapshot when it detects a fault, so you do not have to catch the moment by hand.</string>
+    <string name="monitor_desc">Samples the link every 20s into a bounded timeline, and switches to 5s sampling for a minute whenever it detects a fault — plus a full snapshot — so you do not have to catch the moment by hand.</string>
     <string name="monitor_start">Start monitoring</string>
     <string name="monitor_stop_action">Stop monitoring</string>
     <string name="monitor_state">Samples %1$d · auto-captured %2$d</string>
     <string name="monitor_last_trigger">Last trigger: %s</string>
-    <string name="monitor_bounded">Ring buffer capped at %d samples (~12h); the oldest are dropped, storage never grows without bound.</string>
+    <string name="monitor_bounded">Ring buffer capped at %d samples (~16h at the normal rate); the oldest are dropped, storage never grows without bound.</string>
 </resources>

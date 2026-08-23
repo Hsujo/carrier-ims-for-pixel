@@ -63,6 +63,7 @@ data class SnapshotSummary(
             "rtt_min_ms",
             "rtt_max_ms",
             "rtt_jitter_ms",
+            "rtt_samples",
             "latency_verdict",
             "probe_verdict",
             "nr_mode_config",
@@ -245,8 +246,15 @@ data class SnapshotSummary(
                 probe.latency?.let { lat ->
                     fields["rtt_min_ms"] = lat.minMs?.toString() ?: UNKNOWN
                     fields["rtt_max_ms"] = lat.maxMs?.toString() ?: UNKNOWN
-                    fields["rtt_jitter_ms"] = lat.jitterMs?.toString() ?: UNKNOWN
+                    // 有样本被超时截断时，抖动只是下界，必须标出来 ——
+                    // 否则读到的数会比真实情况小，而且恰好小在最差的时刻。
+                    fields["rtt_jitter_ms"] = lat.jitterMs?.let {
+                        if (lat.jitterIsLowerBound) ">=$it (${lat.censored} 次探测超时)" else "$it"
+                    } ?: UNKNOWN
                     fields["latency_verdict"] = lat.verdict
+                    fields["rtt_samples"] = "${lat.samples.size} 次" +
+                        (if (lat.censored > 0) "（含 ${lat.censored} 次超时）" else "") +
+                        (if (lat.failures > 0) "，失败 ${lat.failures} 次" else "")
                 }
                 fields["probe_verdict"] = probe.verdict.substringBefore(":")
                 fields["target_sub_id"] = probe.targetSubId?.toString() ?: UNKNOWN

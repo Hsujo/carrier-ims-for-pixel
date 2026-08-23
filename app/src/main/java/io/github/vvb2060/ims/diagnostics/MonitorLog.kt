@@ -59,8 +59,9 @@ class MonitorLog(private val context: Context) {
         const val FILE_NAME = "timeline.csv"
 
         /**
-         * 容量上限。按默认 15 秒一次采样，2880 条约覆盖 12 小时；
-         * 单行约 60 字节，文件上限约 170KB。
+         * 容量上限。按常态 20 秒一次采样，2880 条约覆盖 16 小时；
+         * 异常触发的加密采样期间覆盖时长相应缩短。
+         * 单行约 70 字节，文件上限约 200KB。
          */
         const val MAX_SAMPLES = 2880
     }

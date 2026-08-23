@@ -62,7 +62,9 @@ class MonitorService : Service() {
     private suspend fun runLoop() {
         var previous: MonitorSample? = null
         var lastCaptureAt = 0L
+        var fastRemaining = 0
         while (scope.isActive) {
+            val startedAt = System.currentTimeMillis()
             val sample = runCatching { takeSample() }.getOrElse {
                 Log.w(TAG, "sample failed", it)
                 MonitorSample(
@@ -86,8 +88,25 @@ class MonitorService : Service() {
             }
             previous = sample
             _sampleCount.value = log.size()
-            updateNotification(sample, reason)
-            delay(SAMPLE_INTERVAL_MILLIS)
+
+            // 判定为异常就转入加密采样，把这一段劣化的形状测出来。
+            // 实测 16 段高抖动里有 13 段只落到一个样本上 —— 在原来的节奏下，
+            // 无从判断它持续了 3 秒还是 25 秒。
+            if (reason != null) fastRemaining = FAST_BURST_SAMPLES
+            val period = if (fastRemaining > 0) {
+                fastRemaining--
+                FAST_INTERVAL_MILLIS
+            } else {
+                SAMPLE_INTERVAL_MILLIS
+            }
+            _fastMode.value = fastRemaining > 0
+            updateNotification(sample, reason, fastRemaining > 0)
+
+            // 定频而非「跑完再等固定时长」。
+            // 旧写法的真实周期是 15s + 探测耗时，实测中位 27.8s、最长 76.6s，
+            // 而且链路越差探测越慢、采样越稀 —— 恰好在最该密集采样时丢分辨率。
+            val elapsed = System.currentTimeMillis() - startedAt
+            delay((period - elapsed).coerceAtLeast(MIN_GAP_MILLIS))
         }
     }
 
@@ -96,7 +115,11 @@ class MonitorService : Service() {
      * 完整 dumpsys 留给异常触发时的快照。
      */
     private suspend fun takeSample(): MonitorSample {
-        val probe = NetworkProbe.run(this, targetSubId.takeIf { it >= 0 })
+        val probe = NetworkProbe.run(
+            this,
+            targetSubId.takeIf { it >= 0 },
+            NetworkProbe.Profile.MONITOR,
+        )
         val rat = runCatching { ShizukuSystemProperties.get("gsm.network.type", "") }
             .getOrDefault("")
             .split(',')
@@ -211,7 +234,7 @@ class MonitorService : Service() {
             .build()
     }
 
-    private fun updateNotification(sample: MonitorSample, reason: String?) {
+    private fun updateNotification(sample: MonitorSample, reason: String?, fast: Boolean = false) {
         val text = buildString {
             append(sample.rat.ifBlank { "RAT?" })
             sample.rsrp?.let { append(" · ").append(it).append("dBm") }
@@ -221,6 +244,7 @@ class MonitorService : Service() {
                 append(" · 热 ").append(sample.thermal)
             }
             append(" · 样本 ").append(log.size())
+            if (fast) append(" · 加密采样")
             if (reason != null) append(" · 已捕获")
         }
         runCatching {
@@ -233,6 +257,7 @@ class MonitorService : Service() {
         log.flush()
         scope.cancel()
         _running.value = false
+        _fastMode.value = false
         super.onDestroy()
     }
 
@@ -243,8 +268,29 @@ class MonitorService : Service() {
         const val ACTION_STOP = "io.github.vvb2060.ims.MONITOR_STOP"
         const val EXTRA_SUB_ID = "sub_id"
 
-        /** 采样间隔。太密会明显耗电与流量，15 秒足以抓住持续数十秒的劣化。 */
-        const val SAMPLE_INTERVAL_MILLIS = 15_000L
+        /**
+         * 常态采样周期（**定频**，含探测自身耗时）。
+         *
+         * 不宜再压：探测本身要发起真实连接，而实测这台机在 NR SA 下
+         * 86.5% 的发射时间顶在最高功率档，采样越密越热，
+         * 热缓解就越频繁地对 modem 下发节流 —— 那是拿观测去扰动被观测对象。
+         * 常态留稀、异常转密，比一味缩短间隔更划算。
+         */
+        const val SAMPLE_INTERVAL_MILLIS = 20_000L
+
+        /** 异常后的加密采样周期。 */
+        const val FAST_INTERVAL_MILLIS = 5_000L
+
+        /** 加密采样的持续条数；按 5 秒一条约覆盖 1 分钟。 */
+        const val FAST_BURST_SAMPLES = 12
+
+        /**
+         * 两次采样之间的最小间隔。
+         *
+         * 定频调度下，若探测耗时超过周期，delay 会算出负数而变成连续背靠背探测。
+         * 满功率发射的情况下那会明显加剧发热，必须留出硬下限。
+         */
+        const val MIN_GAP_MILLIS = 1_000L
 
         /** 触发完整快照的冷却时间，避免持续劣化时反复采集塞满存储。 */
         const val CAPTURE_COOLDOWN_MILLIS = 5 * 60_000L
@@ -260,6 +306,9 @@ class MonitorService : Service() {
 
         private val _lastTrigger = MutableStateFlow<String?>(null)
         val lastTrigger: StateFlow<String?> = _lastTrigger.asStateFlow()
+
+        private val _fastMode = MutableStateFlow(false)
+        val fastMode: StateFlow<Boolean> = _fastMode.asStateFlow()
 
         fun start(context: Context, subId: Int) {
             val intent = Intent(context, MonitorService::class.java).putExtra(EXTRA_SUB_ID, subId)

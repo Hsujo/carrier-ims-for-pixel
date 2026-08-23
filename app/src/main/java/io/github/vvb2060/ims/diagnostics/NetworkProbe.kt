@@ -20,6 +20,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 
 /**
  * 蜂窝网络连通性探测。
@@ -63,6 +64,55 @@ object NetworkProbe {
 
     /** 申请蜂窝网络的等待上限。 */
     private const val REQUEST_NETWORK_TIMEOUT_MILLIS = 8_000
+
+    /**
+     * 探测强度。
+     *
+     * 后台监测和现场快照的取舍完全不同：快照只跑一次，宁可慢也要证据齐；
+     * 监测每隔十几秒跑一次，一次跑多久直接决定了采样周期
+     * —— 实测「15 秒间隔」的真实周期中位数是 27.8 秒，最长 76.6 秒，
+     * 多出来的全是探测自身耗时，而且**链路越差探测越慢、采样越稀**，
+     * 恰好在最需要密集采样的时候把分辨率丢掉了。
+     */
+    enum class Profile(
+        val latencySamples: Int,
+        val latencyTimeoutMillis: Int,
+        /** 时延探测总预算：到点即停，已采到的样本照常保留。 */
+        val latencyBudgetMillis: Long,
+        val ipTargetCount: Int,
+        val ipPortCount: Int,
+        val dnsEnabled: Boolean,
+        val requestNetworkTimeoutMillis: Int,
+    ) {
+        /** 现场快照：证据优先。 */
+        FULL(
+            latencySamples = LATENCY_SAMPLES,
+            latencyTimeoutMillis = LATENCY_TIMEOUT_MILLIS,
+            latencyBudgetMillis = 40_000,
+            ipTargetCount = 3,
+            ipPortCount = 2,
+            dnsEnabled = true,
+            requestNetworkTimeoutMillis = REQUEST_NETWORK_TIMEOUT_MILLIS,
+        ),
+
+        /**
+         * 后台监测：节奏优先。
+         *
+         * 单次超时上限**不下调** —— 要测的就是秒级停顿，超时调到 2 秒
+         * 等于把 5736ms 的抖动截断成 2000ms，signal 本身就没了。
+         * 控制耗时靠总预算：链路好时 5 个样本几百毫秒就跑完，
+         * 链路坏时第一个样本就吃掉预算，样本数变少但那个大值被如实记下。
+         */
+        MONITOR(
+            latencySamples = 5,
+            latencyTimeoutMillis = LATENCY_TIMEOUT_MILLIS,
+            latencyBudgetMillis = 8_000,
+            ipTargetCount = 1,
+            ipPortCount = 1,
+            dnsEnabled = false,
+            requestNetworkTimeoutMillis = 5_000,
+        ),
+    }
 
     data class LinkSnapshot(
         /** true 表示链路状态根本没读出来（例如缺权限），与「确实没有蜂窝网络」是两回事。 */
@@ -115,6 +165,17 @@ object NetworkProbe {
         val samples: List<Long>,
         val failures: Int,
         val boundToCellular: Boolean,
+        /**
+         * 被超时截断的样本数。
+         *
+         * 超时意味着「RTT >= 超时上限」，是这次测量里最重要的一类观测。
+         * 早先的实现把它当失败丢掉，于是链路最差的时刻反而没有样本进入抖动计算
+         * —— 抖动被系统性地低估。现在按超时值计入 samples，并单独计数，
+         * 这样报出来的抖动是下界而不是错值。
+         */
+        val censored: Int = 0,
+        /** 实际用掉的探测时间，用于核对采样周期。 */
+        val elapsedMillis: Long = 0,
     ) {
         val minMs: Long? get() = samples.minOrNull()
         val maxMs: Long? get() = samples.maxOrNull()
@@ -123,14 +184,18 @@ object NetworkProbe {
         /** 极差：最能反映「偶发的秒级卡顿」，比标准差更贴近体感。 */
         val jitterMs: Long? get() = if (samples.size >= 2) (maxMs!! - minMs!!) else null
 
+        /** 含被截断样本时，抖动只是下界。 */
+        val jitterIsLowerBound: Boolean get() = censored > 0
+
         val verdict: String
             get() {
                 val j = jitterMs ?: return UNKNOWN_TEXT
+                val ge = if (jitterIsLowerBound) ">=" else ""
                 return when {
-                    j >= 2000 -> "SEVERE_JITTER (${j}ms，存在秒级停顿)"
-                    j >= 500 -> "HIGH_JITTER (${j}ms)"
-                    j >= 150 -> "MODERATE_JITTER (${j}ms)"
-                    else -> "STABLE (${j}ms)"
+                    j >= 2000 -> "SEVERE_JITTER ($ge${j}ms，存在秒级停顿)"
+                    j >= 500 -> "HIGH_JITTER ($ge${j}ms)"
+                    j >= 150 -> "MODERATE_JITTER ($ge${j}ms)"
+                    else -> "STABLE ($ge${j}ms)"
                 }
             }
     }
@@ -159,7 +224,11 @@ object NetworkProbe {
      * @param targetSubId 目标 SIM。双卡时必须指定，否则可能测到另一张卡的链路，
      *        得出的结论与被诊断的卡无关。
      */
-    suspend fun run(context: Context, targetSubId: Int? = null): Result = withContext(Dispatchers.IO) {
+    suspend fun run(
+        context: Context,
+        targetSubId: Int? = null,
+        profile: Profile = Profile.FULL,
+    ): Result = withContext(Dispatchers.IO) {
         // 链路状态只需要 ACCESS_NETWORK_STATE，枚举即可读到。
         val lookup = findCellularNetwork(context, targetSubId)
         val link = collectLink(context, lookup)
@@ -170,7 +239,7 @@ object NetworkProbe {
         var callback: ConnectivityManager.NetworkCallback? = null
         try {
             val requested = if (cm != null) {
-                val (network, cb) = requestCellularNetwork(cm, targetSubId)
+                val (network, cb) = requestCellularNetwork(cm, targetSubId, profile)
                 callback = cb
                 network
             } else {
@@ -180,9 +249,9 @@ object NetworkProbe {
             val probedSubId = cellular?.let { subIdOf(cm, it) }
             // 两类探测互不依赖，并行执行以缩短现场等待时间。
             val triple = coroutineScope {
-                val ip = async { probeIpReachability(cellular) }
-                val dns = async { probeDnsResolution(cellular) }
-                val lat = async { probeLatency(cellular) }
+                val ip = async { probeIpReachability(cellular, profile) }
+                val dns = async { probeDnsResolution(cellular, profile) }
+                val lat = async { probeLatency(cellular, profile) }
                 Triple(ip.await(), dns.await(), lat.await())
             }
             val (ipProbe, dnsProbe, latency) = triple
@@ -215,6 +284,7 @@ object NetworkProbe {
     private suspend fun requestCellularNetwork(
         cm: ConnectivityManager,
         targetSubId: Int?,
+        profile: Profile = Profile.FULL,
     ): Pair<Network?, ConnectivityManager.NetworkCallback?> {
         if (targetSubId != null && targetSubId >= 0) {
             val specific = runCatching {
@@ -227,7 +297,7 @@ object NetworkProbe {
                     .build()
             }.getOrNull()
             if (specific != null) {
-                val result = awaitNetwork(cm, specific)
+                val result = awaitNetwork(cm, specific, profile.requestNetworkTimeoutMillis)
                 if (result.first != null) return result
                 result.second?.let { runCatching { cm.unregisterNetworkCallback(it) } }
                 Log.i(TAG, "specific request for subId=$targetSubId unavailable, falling back")
@@ -237,12 +307,13 @@ object NetworkProbe {
             .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        return awaitNetwork(cm, generic)
+        return awaitNetwork(cm, generic, profile.requestNetworkTimeoutMillis)
     }
 
     private suspend fun awaitNetwork(
         cm: ConnectivityManager,
         request: NetworkRequest,
+        timeoutMillis: Int,
     ): Pair<Network?, ConnectivityManager.NetworkCallback?> = try {
         suspendCancellableCoroutine { cont ->
             val cb = object : ConnectivityManager.NetworkCallback() {
@@ -262,7 +333,7 @@ object NetworkProbe {
                 }
             }
             try {
-                cm.requestNetwork(request, cb, REQUEST_NETWORK_TIMEOUT_MILLIS)
+                cm.requestNetwork(request, cb, timeoutMillis)
             } catch (t: Throwable) {
                 Log.w(TAG, "requestNetwork failed", t)
                 cont.resume(null to null)
@@ -365,15 +436,19 @@ object NetworkProbe {
      * 纯 IP 可达性：逐个大陆目标、逐个端口尝试，任意一个连通即算通。
      * 单个主机或端口被拦不足以判定链路不通，因此把每个目标的结果都记下来。
      */
-    private fun probeIpReachability(network: Network?): ProbeResult {
+    private fun probeIpReachability(network: Network?, profile: Profile): ProbeResult {
         val details = mutableListOf<String>()
         var successes = 0
         var lastError: String? =
             if (network == null) "not bound to a cellular network, used the default route" else null
+        // 后台监测只取一个目标一个端口：多目标是为了在现场分辨「个别目标被拦」，
+        // 而监测要的是节奏，通断本身有时延探测兜底。
+        val targets = IP_TARGETS.take(profile.ipTargetCount)
+        val ports = IP_PORTS.take(profile.ipPortCount)
 
-        for ((ip, label) in IP_TARGETS) {
+        for ((ip, label) in targets) {
             var reached = false
-            for (port in IP_PORTS) {
+            for (port in ports) {
                 val error = tryConnect(network, InetAddress.getByName(ip), port)
                 if (error == null) {
                     details += "$label $ip:$port ok"
@@ -387,8 +462,8 @@ object NetworkProbe {
         }
         return ProbeResult(
             label = "ip",
-            target = IP_TARGETS.joinToString { it.first },
-            attempts = IP_TARGETS.size,
+            target = targets.joinToString { it.first },
+            attempts = targets.size,
             successes = successes,
             lastError = lastError,
             boundToCellular = network != null,
@@ -402,7 +477,20 @@ object NetworkProbe {
      * 域名可达性：经蜂窝 Network 解析大陆域名再连接。
      * 必须用该 Network 解析，否则测的是默认网络（可能是 Wi-Fi）的解析器。
      */
-    private fun probeDnsResolution(network: Network?): ProbeResult {
+    private fun probeDnsResolution(network: Network?, profile: Profile): ProbeResult {
+        // 后台监测不解析域名：DNS 结果在这个故障里从来没变过（一直正常），
+        // 每次却要多花一次解析加一次握手，只是在拖慢采样。
+        if (!profile.dnsEnabled) {
+            return ProbeResult(
+                label = "dns",
+                target = "(skipped in monitor profile)",
+                attempts = 0,
+                successes = 0,
+                lastError = null,
+                boundToCellular = network != null,
+                details = emptyList(),
+            )
+        }
         val details = mutableListOf<String>()
         var successes = 0
         var lastError: String? =
@@ -442,26 +530,52 @@ object NetworkProbe {
     /**
      * 连续多次连接同一目标，记录每次 RTT。
      *
-     * 样本数取 6：既能看出尾部发散，又把最坏耗时控制在可接受范围内
-     * （与其他探测并行执行）。
+     * 串行而非并行：并行发出的连接共享同一瞬间，测不出「前后两次差了几秒」，
+     * 而抖动正是这个故障的指纹。
+     *
+     * 两处约束缺一不可：
+     * - **总预算**限制整段耗时，否则链路差时单次探测能拖到几十秒，
+     *   把后台采样周期一起拖垮（实测最长 76.6 秒）；
+     * - **超时按下界计入**而不是丢弃，否则最差的时刻反而没有样本。
      */
-    private fun probeLatency(network: Network?): LatencyResult {
+    private fun probeLatency(network: Network?, profile: Profile): LatencyResult {
         val target = IP_TARGETS.first()
         val samples = mutableListOf<Long>()
         var failures = 0
+        var censored = 0
+        val startedAll = System.nanoTime()
+        fun elapsed() = (System.nanoTime() - startedAll) / 1_000_000
         val address = runCatching { InetAddress.getByName(target.first) }.getOrNull()
-            ?: return LatencyResult(target.first, emptyList(), LATENCY_SAMPLES, network != null)
+            ?: return LatencyResult(
+                target.first, emptyList(), profile.latencySamples, network != null,
+                elapsedMillis = elapsed(),
+            )
 
-        repeat(LATENCY_SAMPLES) {
+        repeat(profile.latencySamples) {
+            // 预算用尽即停：已采到的样本照常保留，样本少也好过采样周期失控。
+            if (elapsed() >= profile.latencyBudgetMillis) return@repeat
             val started = System.nanoTime()
-            val error = tryConnect(network, address, IP_PORTS.first(), LATENCY_TIMEOUT_MILLIS)
-            if (error == null) {
-                samples += (System.nanoTime() - started) / 1_000_000
-            } else {
-                failures++
+            val failure = connectFailure(
+                network, address, IP_PORTS.first(), profile.latencyTimeoutMillis
+            )
+            when {
+                failure == null -> samples += (System.nanoTime() - started) / 1_000_000
+                // 超时 = RTT 至少有这么大，这是观测不是缺失。
+                failure is SocketTimeoutException -> {
+                    samples += profile.latencyTimeoutMillis.toLong()
+                    censored++
+                }
+                else -> failures++
             }
         }
-        return LatencyResult(target.first, samples, failures, network != null)
+        return LatencyResult(
+            target = target.first,
+            samples = samples,
+            failures = failures,
+            boundToCellular = network != null,
+            censored = censored,
+            elapsedMillis = elapsed(),
+        )
     }
 
     /** @return null 表示连通；否则返回失败原因。 */
@@ -470,12 +584,25 @@ object NetworkProbe {
         address: InetAddress,
         port: Int,
         timeoutMillis: Int = CONNECT_TIMEOUT_MILLIS,
-    ): String? = try {
+    ): String? = connectFailure(network, address, port, timeoutMillis)?.let { describe(it) }
+
+    /**
+     * @return null 表示连通；否则返回原始异常。
+     *
+     * 保留异常本体而非只给文本：时延探测必须能把「超时」和「立刻被拒」
+     * 区分开 —— 前者是 RTT 的下界观测，后者才是真正的失败。
+     */
+    private fun connectFailure(
+        network: Network?,
+        address: InetAddress,
+        port: Int,
+        timeoutMillis: Int,
+    ): Throwable? = try {
         val socket = network?.socketFactory?.createSocket() ?: Socket()
         socket.use { it.connect(InetSocketAddress(address, port), timeoutMillis) }
         null
     } catch (t: Throwable) {
-        describe(t)
+        t
     }
 
     /**
