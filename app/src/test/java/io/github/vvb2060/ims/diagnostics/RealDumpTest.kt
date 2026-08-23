@@ -62,4 +62,67 @@ class RealDumpTest {
     fun dataNetworkStateIsParsed() {
         assertEquals("CONNECTED", summaryOf(realConnectivity).fields["data_network_state"])
     }
+
+    /**
+     * 真机 telephony.registry 的双卡结构：Phone Id=0 是联通（HOME，EN-DC 不可用），
+     * Phone Id=1 是 3HK（在国内属正常国际漫游，EN-DC 可用）。
+     * 不按目标卡裁剪就会把 3HK 的漫游与 EN-DC 状态安到联通头上。
+     */
+    private val dualSimRegistry = """
+Phone Id=0
+  subId=2
+  mServiceState={mVoiceRegState=0(IN_SERVICE), mDataRegState=0(IN_SERVICE), getRilDataRadioTechnology=14(LTE), mNetworkRegistrationInfos=[NetworkRegistrationInfo{ domain=PS transportType=WWAN registrationState=HOME networkRegistrationState=HOME roamingType=NOT_ROAMING accessNetworkTechnology=LTE rejectCause=0 dataSpecificInfo=android.telephony.DataSpecificRegistrationInfo :{ isDcNrRestricted = false isNrAvailable = false isEnDcAvailable = false } nrState=**** rRplmn=46001}]}
+Phone Id=1
+  subId=5
+  mServiceState={mVoiceRegState=0(IN_SERVICE), mDataRegState=0(IN_SERVICE), getRilDataRadioTechnology=14(LTE), mNetworkRegistrationInfos=[NetworkRegistrationInfo{ domain=PS transportType=WWAN registrationState=ROAMING networkRegistrationState=ROAMING roamingType=INTERNATIONAL accessNetworkTechnology=LTE rejectCause=0 dataSpecificInfo=android.telephony.DataSpecificRegistrationInfo :{ isDcNrRestricted = false isNrAvailable = true isEnDcAvailable = true } nrState=**** rRplmn=46001}]}
+    """.trimIndent()
+
+    private fun dualSimSummary(subId: String, slot: String) = SnapshotSummary.from(
+        Snapshot(
+            kind = SnapshotKind.GOOD,
+            name = "GOOD_dual",
+            takenAtMillis = 0L,
+            metadata = mapOf("sub_id" to subId, "slot_index" to slot),
+            commands = listOf(
+                CommandResult("dumpsys telephony.registry", "0", dualSimRegistry, ""),
+                CommandResult("dumpsys connectivity", "0", "", ""),
+            ),
+            probe = null,
+            probeError = null,
+        )
+    )
+
+    @Test
+    fun registryIsScopedToTheTargetSim() {
+        val unicom = dualSimSummary("2", "0")
+        assertEquals("HOME", unicom.fields["registration_state"])
+        assertEquals("NOT_ROAMING", unicom.fields["roaming_type"])
+        assertTrue(unicom.fields["registry_scope"]!!.contains("subId=2"))
+    }
+
+    @Test
+    fun theOtherSimsRoamingIsNotAttributedToTheTarget() {
+        // 3HK 在国内是正常国际漫游；裁剪失效会把它误安到联通卡上。
+        val threeHk = dualSimSummary("5", "1")
+        assertEquals("ROAMING", threeHk.fields["registration_state"])
+        assertEquals("INTERNATIONAL", threeHk.fields["roaming_type"])
+    }
+
+    @Test
+    fun endcAvailabilityIsReadPerSim() {
+        // 「为什么没有 5G」的关键字段，必须来自目标卡。
+        assertEquals("false", dualSimSummary("2", "0").fields["is_endc_available"])
+        assertEquals("true", dualSimSummary("5", "1").fields["is_endc_available"])
+    }
+
+    @Test
+    fun redactedNrStateIsDistinguishedFromUnparsed() {
+        assertEquals(SnapshotSummary.REDACTED, dualSimSummary("2", "0").fields["nr_state"])
+    }
+
+    @Test
+    fun ratComesFromRegistryNotStaleConnectivity() {
+        // 14(LTE) 应归一化为可读的 LTE，而不是截断成 "14(LTE"。
+        assertEquals("LTE", dualSimSummary("2", "0").fields["rat"])
+    }
 }

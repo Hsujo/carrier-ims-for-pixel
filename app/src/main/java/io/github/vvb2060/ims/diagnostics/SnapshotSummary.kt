@@ -24,6 +24,9 @@ data class SnapshotSummary(
     companion object {
         const val UNKNOWN = "UNKNOWN"
 
+        /** dumpsys 主动打码的值（如 nrState=****），与「解析不出」是两回事。 */
+        const val REDACTED = "REDACTED (dumpsys 打码)"
+
         /** 字段顺序即报告顺序：先无线侧，再数据面，最后连通性。 */
         private val FIELD_ORDER = listOf(
             "rat",
@@ -31,6 +34,11 @@ data class SnapshotSummary(
             "nr_state",
             "nsa_sa_clue",
             "ps_registration_state",
+            "registration_state",
+            "roaming_type",
+            "is_nr_available",
+            "is_endc_available",
+            "is_dc_nr_restricted",
             "data_connection_state",
             "data_available",
             "reject_cause",
@@ -49,6 +57,7 @@ data class SnapshotSummary(
             "nr_mode_config",
             "target_sub_id",
             "probed_sub_id",
+            "registry_scope",
         )
 
         /**
@@ -58,15 +67,29 @@ data class SnapshotSummary(
          */
         private val TELEPHONY_PATTERNS = mapOf(
             "nr_state" to listOf(
+                // 真机上该值被 dumpsys 打码为 ****，需与「解析不出」区分开。
+                """\bnrState=(\*{2,})""",
                 """\bnrState=(\w+)""",
                 """\bmNrState=(\w+)""",
                 """\bnrStatus=(\w+)""",
             ),
             "rat" to listOf(
+                """\bgetRilDataRadioTechnology=(\S+?)[,\s]""",
                 """\brilDataRadioTechnology=(\w+)""",
                 """\bdataRat=(\w+)""",
-                """\bgetDataNetworkType=(\w+)""",
                 """\bdataNetworkType=(\w+)""",
+            ),
+            // 这三项直接回答「为什么没有 5G」：EN-DC 不可用时 NSA 无从建立。
+            "is_nr_available" to listOf("""\bisNrAvailable\s*=\s*(\w+)"""),
+            "is_endc_available" to listOf("""\bisEnDcAvailable\s*=\s*(\w+)"""),
+            "is_dc_nr_restricted" to listOf("""\bisDcNrRestricted\s*=\s*(\w+)"""),
+            "registration_state" to listOf(
+                """domain=PS\s+transportType=WWAN\s+registrationState=(\w+)""",
+                """\bregistrationState=(\w+)""",
+            ),
+            "roaming_type" to listOf(
+                """domain=PS\s+transportType=WWAN[^}]*?roamingType=(\w+)""",
+                """\broamingType=(\w+)""",
             ),
             "lte_state" to listOf(
                 """\bmVoiceRegState=(\S+)""",
@@ -126,7 +149,15 @@ data class SnapshotSummary(
             val fields = LinkedHashMap<String, String>()
             FIELD_ORDER.forEach { fields[it] = UNKNOWN }
 
-            val telephony = textOf(snapshot.commands, "dumpsys telephony.registry")
+            // 双卡设备上 telephony.registry 同时包含两张卡的记录。
+            // 不做限定就会匹配到先出现的那一张 —— 例如把 3HK 在国内的
+            // 正常国际漫游，误读成联通卡在漫游。必须先裁到目标卡。
+            val telephonyRaw = textOf(snapshot.commands, "dumpsys telephony.registry")
+            val targetSubId = snapshot.metadata["sub_id"]?.toIntOrNull()
+            val slotIndex = snapshot.metadata["slot_index"]?.toIntOrNull()
+            val scoped = scopeToPhone(telephonyRaw, targetSubId, slotIndex)
+            fields["registry_scope"] = scoped.second
+            val telephony = scoped.first
             val connectivity = textOf(snapshot.commands, "dumpsys connectivity")
 
             TELEPHONY_PATTERNS.forEach { (field, patterns) ->
@@ -138,9 +169,11 @@ data class SnapshotSummary(
 
             // telephony.registry 可能采集失败（输出过大）或格式不识别，
             // 此时 connectivity 里的 MOBILE[NR] / MOBILE[LTE] 仍能给出数据 RAT。
+            // connectivity 的 ni{MOBILE[NR]} 可能是上一次连接遗留的陈旧值，
+            // registry 的 getRilDataRadioTechnology 才是当前实际 RAT，优先采用。
             val ratFallback = fields.remove("rat_from_connectivity")
             if (fields["rat"] == UNKNOWN && !ratFallback.isNullOrBlank() && ratFallback != UNKNOWN) {
-                fields["rat"] = "$ratFallback (from connectivity)"
+                fields["rat"] = "$ratFallback (from connectivity, may be stale)"
             }
 
             // NSA / SA 线索：NR 已连接但注册在 LTE 上，是 EN-DC（NSA）的典型特征。
@@ -222,6 +255,40 @@ data class SnapshotSummary(
             }
         }
 
+        /**
+         * 把 telephony.registry 裁剪到目标 SIM 对应的 Phone Id 段。
+         *
+         * @return 裁剪后的文本，以及一段说明裁剪依据的字符串 —— 裁剪失败时
+         *         必须让阅读者知道后续字段可能来自另一张卡。
+         */
+        private fun scopeToPhone(
+            text: String,
+            subId: Int?,
+            slotIndex: Int?,
+        ): Pair<String, String> {
+            if (text.isBlank()) return text to "empty dump"
+            val markers = Regex("""Phone Id=(\d+)""").findAll(text).toList()
+            if (markers.isEmpty()) return text to "no Phone Id markers, using whole dump"
+
+            val sections = markers.mapIndexed { index, match ->
+                val start = match.range.first
+                val end = if (index + 1 < markers.size) markers[index + 1].range.first else text.length
+                match.groupValues[1].toIntOrNull() to text.substring(start, end)
+            }
+            // 优先按 subId 命中，其次按槽位号，最后放弃裁剪但明确标注。
+            if (subId != null) {
+                sections.firstOrNull { it.second.contains("subId=$subId") }?.let {
+                    return it.second to "scoped to subId=$subId"
+                }
+            }
+            if (slotIndex != null) {
+                sections.firstOrNull { it.first == slotIndex }?.let {
+                    return it.second to "scoped to Phone Id=$slotIndex (by slot)"
+                }
+            }
+            return text to "could not scope to target SIM; fields may come from another SIM"
+        }
+
         private fun textOf(commands: List<CommandResult>, command: String): String =
             commands.firstOrNull { it.command == command }?.stdout.orEmpty()
 
@@ -231,8 +298,13 @@ data class SnapshotSummary(
                 val match = runCatching {
                     Regex(pattern, RegexOption.IGNORE_CASE).find(text)
                 }.getOrNull()
-                val value = match?.groupValues?.getOrNull(1)?.trim()?.trimEnd(',', '}', ')')
-                if (!value.isNullOrBlank()) return value
+                val raw = match?.groupValues?.getOrNull(1)?.trim()?.trimEnd(',', '}')
+                if (raw.isNullOrBlank()) continue
+                // dumpsys 主动打码的值（nrState=****）与「解析不出」含义不同。
+                if (raw.all { it == '*' }) return REDACTED
+                // 形如 14(LTE) / 0(IN_SERVICE) 的取值，取括号内的可读名称。
+                val readable = Regex("""^\d+\((\w+)\)?$""").find(raw)?.groupValues?.get(1)
+                return readable ?: raw.trimEnd(')')
             }
             return null
         }

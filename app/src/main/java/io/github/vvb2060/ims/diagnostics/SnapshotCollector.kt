@@ -50,8 +50,8 @@ object SnapshotCollector {
     private const val DUMPSYS_MAX_BYTES = 1024 * 1024
     private const val SMALL_MAX_BYTES = 128 * 1024
 
-    /** IMS dump 的服务名各版本不一致，按可能性依次尝试。 */
-    private val IMS_SERVICE_CANDIDATES = listOf("telephony.ims", "ims", "imsbinder")
+    /** 真机 dumpsys -l 显示实际服务名是 telephony_ims（下划线），不是 ims。 */
+    private val IMS_SERVICE_CANDIDATES = listOf("telephony_ims", "telephony.ims", "ims")
 
     private val nameFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 

@@ -73,7 +73,10 @@ class SnapshotSummaryTest {
     @Test
     fun emptyDumpsKeepEveryFieldUnknown() {
         val summary = SnapshotSummary.from(snapshot())
-        assertTrue(summary.fields.values.all { it == SnapshotSummary.UNKNOWN })
+        // registry_scope 描述的是解析过程本身，不是被解析出的字段。
+        summary.fields.filterKeys { it != "registry_scope" }.forEach { (key, value) ->
+            assertEquals(SnapshotSummary.UNKNOWN, value, "field $key")
+        }
     }
 
     @Test
