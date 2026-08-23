@@ -14,6 +14,9 @@ data class MonitorSample(
     val rttMs: Long?,
     val jitterMs: Long?,
     val probeOk: Boolean,
+    /** 服务小区的 RSRP / SINR；读不到时为 null。 */
+    val rsrp: Int?,
+    val sinr: Int?,
     val note: String,
 ) {
     fun toCsvRow(): String = listOf(
@@ -24,11 +27,17 @@ data class MonitorSample(
         rttMs?.toString() ?: "",
         jitterMs?.toString() ?: "",
         probeOk.toString(),
+        rsrp?.toString() ?: "",
+        sinr?.toString() ?: "",
         note.replace(',', ';').replace('\n', ' '),
     ).joinToString(",")
 
     companion object {
-        const val CSV_HEADER = "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,note"
+        // 信号必须与抖动同行记录：只有并排看才能判断卡顿是不是弱信号导致的。
+        // 实测证明两者不相关（-88dBm/SINR21 时抖动 4681ms），
+        // 而当初时间线没有信号列，只能逐个打开快照才发现。
+        const val CSV_HEADER =
+            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,note"
     }
 }
 

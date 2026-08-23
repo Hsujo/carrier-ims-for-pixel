@@ -195,7 +195,14 @@ data class SnapshotSummary(
                 fields["rat"] = "$ratFallback (from connectivity, may be stale)"
             }
 
-            fields["signal_quality"] = gradeSignal(fields["lte_rsrp"], fields["lte_rssnr"])
+            // SA 下根本没有 LTE 腿，lte_* 全是无效占位；必须按当前 RAT 选对应的指标，
+            // 否则整段 SA 采样的信号质量都会是 UNKNOWN（实测就是如此）。
+            val onNr = fields["rat"]?.uppercase()?.contains("NR") == true
+            fields["signal_quality"] = if (onNr) {
+                gradeSignal(fields["nr_ss_rsrp"], fields["nr_ss_sinr"], "NR")
+            } else {
+                gradeSignal(fields["lte_rsrp"], fields["lte_rssnr"], "LTE")
+            }
 
             // NSA / SA 线索：NR 已连接但注册在 LTE 上，是 EN-DC（NSA）的典型特征。
             fields["nsa_sa_clue"] = deriveNsaSaClue(fields["nr_state"], fields["rat"])
@@ -265,10 +272,9 @@ data class SnapshotSummary(
          * Android 的 VALIDATED 也是上次成功检测的粘滞结果 ——
          * 于是界面显示「已连接」而实际收发不通。此时只有射频指标能说明问题。
          */
-        private fun gradeSignal(rsrpRaw: String?, sinrRaw: String?): String {
+        private fun gradeSignal(rsrpRaw: String?, sinrRaw: String?, band: String): String {
             val rsrp = rsrpRaw?.toIntOrNull()
             val sinr = sinrRaw?.toIntOrNull()
-            // 2147483647 是 Android 的「无效值」占位。
             if (rsrp == null || rsrp == Int.MAX_VALUE) return UNKNOWN
             val quality = when {
                 rsrp <= -120 -> "VERY_POOR"
@@ -282,7 +288,7 @@ data class SnapshotSummary(
                 sinr < 10 -> "，SINR 偏低"
                 else -> ""
             }
-            return "$quality (rsrp=${rsrp}dBm$sinrNote)"
+            return "$quality ($band rsrp=${rsrp}dBm$sinrNote)"
         }
 
         private fun deriveNsaSaClue(nrState: String?, rat: String?): String {
@@ -363,6 +369,8 @@ data class SnapshotSummary(
                 if (raw.isNullOrBlank()) continue
                 // dumpsys 主动打码的值（nrState=****）与「解析不出」含义不同。
                 if (raw.all { it == '*' }) return REDACTED
+                // 2147483647 是 Android 的「无效值」占位，绝不能当成真实读数报出去。
+                if (raw == "2147483647") return UNKNOWN
                 // 形如 14(LTE) / 0(IN_SERVICE) 的取值，取括号内的可读名称。
                 val readable = Regex("""^\d+\((\w+)\)?$""").find(raw)?.groupValues?.get(1)
                 return readable ?: raw.trimEnd(')')

@@ -69,6 +69,7 @@ class MonitorService : Service() {
                     atMillis = System.currentTimeMillis(),
                     rat = "", validated = "", ipv4 = "",
                     rttMs = null, jitterMs = null, probeOk = false,
+                    rsrp = null, sinr = null,
                     note = "sample_error:${it.javaClass.simpleName}",
                 )
             }
@@ -100,6 +101,7 @@ class MonitorService : Service() {
             .split(',')
             .firstOrNull()
             .orEmpty()
+        val signal = readSignal()
         return MonitorSample(
             atMillis = System.currentTimeMillis(),
             rat = rat,
@@ -108,9 +110,36 @@ class MonitorService : Service() {
             rttMs = probe.latency?.avgMs,
             jitterMs = probe.latency?.jitterMs,
             probeOk = probe.ipReachability.ok,
+            rsrp = signal?.first,
+            sinr = signal?.second,
             note = probe.verdict.substringBefore(":"),
         )
     }
+
+    /**
+     * 读取服务小区的 RSRP / SINR。
+     *
+     * 用 TelephonyManager 直读而非 dumpsys：后者输出数百 KB，按采样频率跑不现实。
+     * Android 17 上部分 telephony 接口会抛 SecurityException，
+     * 因此读不到就返回 null，绝不让它中断采样。
+     *
+     * @return (rsrp, sinr)；NR 优先，回落 LTE。
+     */
+    private fun readSignal(): Pair<Int?, Int?>? = runCatching {
+        val tm = getSystemService(android.telephony.TelephonyManager::class.java)
+            ?.createForSubscriptionId(targetSubId)
+            ?: return null
+        val cells = tm.signalStrength?.cellSignalStrengths ?: return null
+        val nr = cells.filterIsInstance<android.telephony.CellSignalStrengthNr>().firstOrNull()
+        if (nr != null && nr.ssRsrp != Int.MAX_VALUE) {
+            return nr.ssRsrp to nr.ssSinr.takeIf { it != Int.MAX_VALUE }
+        }
+        val lte = cells.filterIsInstance<android.telephony.CellSignalStrengthLte>().firstOrNull()
+        if (lte != null && lte.rsrp != Int.MAX_VALUE) {
+            return lte.rsrp to lte.rssnr.takeIf { it != Int.MAX_VALUE }
+        }
+        null
+    }.getOrNull()
 
     private suspend fun captureOnAnomaly(reason: String) {
         val sim = runCatching { ShizukuProvider.readSimInfoList(this) }
@@ -162,6 +191,7 @@ class MonitorService : Service() {
     private fun updateNotification(sample: MonitorSample, reason: String?) {
         val text = buildString {
             append(sample.rat.ifBlank { "RAT?" })
+            sample.rsrp?.let { append(" · ").append(it).append("dBm") }
             append(" · RTT ").append(sample.rttMs?.toString() ?: "-").append("ms")
             append(" · 抖动 ").append(sample.jitterMs?.toString() ?: "-").append("ms")
             append(" · 样本 ").append(log.size())
