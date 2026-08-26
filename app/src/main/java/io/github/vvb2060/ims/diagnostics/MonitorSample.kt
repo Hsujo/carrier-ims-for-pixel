@@ -25,6 +25,13 @@ data class MonitorSample(
      * 140 条样本里只有 110 条落在日志覆盖范围内，其余无从判断。
      */
     val thermal: String,
+    /**
+     * 采样时刻生效的 CarrierConfig 指纹，见 [MonitorConfigTag]。
+     *
+     * 配置可能在监测途中被改（实测一次 6 小时的监测里 NR 模式变了两次），
+     * 没有这一列就无法把时间线切成可比的 A/B 分段。
+     */
+    val config: String,
     val note: String,
 ) {
     fun toCsvRow(): String = listOf(
@@ -38,6 +45,7 @@ data class MonitorSample(
         rsrp?.toString() ?: "",
         sinr?.toString() ?: "",
         thermal,
+        config,
         note.replace(',', ';').replace('\n', ' '),
     ).joinToString(",")
 
@@ -46,7 +54,7 @@ data class MonitorSample(
         // 实测证明两者不相关（-88dBm/SINR21 时抖动 4681ms），
         // 而当初时间线没有信号列，只能逐个打开快照才发现。
         const val CSV_HEADER =
-            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,thermal,note"
+            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,thermal,config,note"
     }
 }
 

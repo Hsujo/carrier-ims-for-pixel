@@ -23,6 +23,7 @@ class MonitorSampleTest {
         rsrp = -88,
         sinr = 21,
         thermal = "MODERATE",
+        config = "nr=1+2(NSA_AND_SA);vonr=0;vt=0;ut=0;xsim=0;iso=655",
         note = note,
     )
 
@@ -48,6 +49,15 @@ class MonitorSampleTest {
         val row = sample(note = "a,b\nc").toCsvRow()
         assertEquals(MonitorSample.CSV_HEADER.split(",").size, row.split(",").size)
         assertTrue(row.endsWith("a;b c"))
+    }
+
+    @Test
+    fun `the config fingerprint never introduces a comma`() {
+        // 配置指纹里含数组，写成 "[1, 2]" 会把整行后面的列全部顶偏。
+        val columns = MonitorSample.CSV_HEADER.split(",")
+        val values = sample().toCsvRow().split(",")
+        assertEquals(columns.size, values.size)
+        assertTrue(values[columns.indexOf("config")].startsWith("nr=1+2"))
     }
 
     @Test

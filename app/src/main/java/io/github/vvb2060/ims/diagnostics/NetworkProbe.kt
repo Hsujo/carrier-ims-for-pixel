@@ -151,6 +151,15 @@ object NetworkProbe {
         val unusable: Boolean = false,
     ) {
         val ok: Boolean get() = successes > 0
+
+        /**
+         * 这项探测根本没跑（剖面里关掉了），因此既不是「通」也不是「不通」。
+         *
+         * 没有这个区分就会出现：MONITOR 剖面关掉 DNS 探测后返回 0/0，
+         * 而 `!ok` 恒为真 —— 实测 1223 条采样里 1217 条被判成 DNS_FAILED，
+         * 判定列整列作废。「没测」必须和「测了没通」分开。
+         */
+        val skipped: Boolean get() = attempts == 0
     }
 
     /**
@@ -650,18 +659,18 @@ object NetworkProbe {
 
         // VALIDATED=true 说明 Android 自己的连通性校验通过过，此刻却连不上任何
         // 大陆公共解析器 —— 两者矛盾本身就是线索，不能只报其中一半。
-        !ip.ok && link.validated == true ->
+        !ip.skipped && !ip.ok && link.validated == true ->
             "IP_UNREACHABLE_WHILE_VALIDATED: 有路由且 Android 判定 VALIDATED，" +
                 "但当前连不上任何大陆公共 IP（校验通过与实际不通存在矛盾，" +
                 "可能是链路刚劣化或仅特定路径不通）"
 
-        !ip.ok ->
+        !ip.skipped && !ip.ok ->
             "IP_UNREACHABLE: 有路由但纯 IP 不通"
 
-        !dns.ok && link.dnsServers.isEmpty() ->
+        !dns.skipped && !dns.ok && link.dnsServers.isEmpty() ->
             "DNS_FAILED_NO_RESOLVER: 纯 IP 可达，但该链路没有任何 DNS 服务器，域名解析失败"
 
-        !dns.ok ->
+        !dns.skipped && !dns.ok ->
             "DNS_FAILED: 纯 IP 可达但域名解析/连接失败"
 
         link.validated == false ->

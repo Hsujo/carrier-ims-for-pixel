@@ -5,8 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.telephony.CarrierConfigManager
 import android.os.IBinder
 import android.util.Log
 import io.github.vvb2060.ims.R
@@ -39,12 +42,51 @@ class MonitorService : Service() {
     private lateinit var log: MonitorLog
     private var targetSubId: Int = -1
 
+    /**
+     * 当前生效的 CarrierConfig 指纹。
+     *
+     * 读一次要走 Shizuku instrumentation，开销远大于一次采样，
+     * 所以只在启动时和收到变更广播时刷新，采样循环直接取这个缓存值。
+     */
+    @Volatile
+    private var configTag: String = MonitorConfigTag.UNKNOWN
+
+    /**
+     * CarrierConfig 变更广播。
+     *
+     * 必须监听而不是只信本应用写过什么：实测配置被另一个应用改掉过，
+     * 只记自己写的会把两段完全不同的配置错并成一段。
+     */
+    private val configChanged = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshConfigTag()
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         log = MonitorLog(this)
         createChannel()
+        // CARRIER_CONFIG_CHANGED 是受保护的系统广播，只有系统能发。
+        runCatching {
+            registerReceiver(
+                configChanged,
+                IntentFilter(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED),
+                RECEIVER_EXPORTED,
+            )
+        }.onFailure { Log.w(TAG, "failed to watch carrier config changes", it) }
+    }
+
+    private fun refreshConfigTag() {
+        scope.launch {
+            val tag = MonitorConfigTag.read(this@MonitorService, targetSubId)
+            if (tag != configTag) {
+                Log.i(TAG, "carrier config now: $tag (was $configTag)")
+                configTag = tag
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,6 +97,7 @@ class MonitorService : Service() {
         targetSubId = intent?.getIntExtra(EXTRA_SUB_ID, -1) ?: -1
         startForeground(NOTIFICATION_ID, buildNotification("正在监测 subId=$targetSubId"))
         _running.value = true
+        refreshConfigTag()
         scope.launch { runLoop() }
         return START_STICKY
     }
@@ -73,6 +116,7 @@ class MonitorService : Service() {
                     rttMs = null, jitterMs = null, probeOk = false,
                     rsrp = null, sinr = null,
                     thermal = readThermal(),
+                    config = configTag,
                     note = "sample_error:${it.javaClass.simpleName}",
                 )
             }
@@ -137,6 +181,7 @@ class MonitorService : Service() {
             rsrp = signal?.first,
             sinr = signal?.second,
             thermal = readThermal(),
+            config = configTag,
             note = probe.verdict.substringBefore(":"),
         )
     }
@@ -254,6 +299,7 @@ class MonitorService : Service() {
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(configChanged) }
         log.flush()
         scope.cancel()
         _running.value = false

@@ -11,9 +11,9 @@ object FeatureConfigMapper {
     private const val KEY_ADDITIONAL_NR_ADVANCED_BANDS = "additional_nr_advanced_bands_int_array"
     private const val KEY_5G_ICON_CONFIGURATION = "5g_icon_configuration_string"
     private const val KEY_NR_ADVANCED_CAPABLE_PCO_ID = "nr_advanced_capable_pco_id_int"
-    private const val KEY_VONR_ENABLED = "vonr_enabled_bool"
+    const val KEY_VONR_ENABLED = "vonr_enabled_bool"
     private const val KEY_VONR_SETTING_VISIBILITY = "vonr_setting_visibility_bool"
-    private const val KEY_SIM_COUNTRY_ISO_OVERRIDE = "sim_country_iso_override_string"
+    const val KEY_SIM_COUNTRY_ISO_OVERRIDE = "sim_country_iso_override_string"
     private val FIVE_G_THRESHOLDS = intArrayOf(-128, -118, -108, -98)
 
     val readKeys: Array<String> = linkedSetOf(
