@@ -1308,9 +1308,12 @@ class MainActivity : BaseActivity() {
                         networkExitError = networkExitError,
                         configBackups = configBackups,
                         nrEnabled = (featureSwitches[Feature.FIVE_G_NR]?.data as? Boolean) == true,
+                        // 读不出已知模式时，单选组默认停在 NSA + SA [1,2]：
+                        // 这既是 NR 模式开关出现前的原本行为，也和 apply 管线里
+                        // 的兜底一致；实际读回值另有一行单独展示，不会被它掩盖。
                         nrSelectedMode = NrMode.fromStorageKey(
                             featureSwitches[Feature.NR_MODE]?.data as? String
-                        ),
+                        ) ?: NrMode.DEFAULT,
                         nrActualAvailabilities = nrActualAvailabilities,
                         applyingNrMode = applyingConfiguration,
                         onOpenDiagnostics = {
@@ -2018,7 +2021,7 @@ private fun ExtraToolsPage(
     networkExitError: String?,
     configBackups: List<ConfigBackupSnapshot>,
     nrEnabled: Boolean,
-    nrSelectedMode: NrMode?,
+    nrSelectedMode: NrMode,
     nrActualAvailabilities: String,
     applyingNrMode: Boolean,
     onSelectNrMode: (NrMode) -> Unit,
@@ -2273,7 +2276,7 @@ private fun DiagnosticsEntryCard(
 private fun NrModeCard(
     selectedSim: SimSelection?,
     nrEnabled: Boolean,
-    selectedMode: NrMode?,
+    selectedMode: NrMode,
     actualAvailabilities: String,
     applying: Boolean,
     enabled: Boolean,

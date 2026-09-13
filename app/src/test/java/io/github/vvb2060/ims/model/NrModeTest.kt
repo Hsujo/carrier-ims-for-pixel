@@ -48,6 +48,16 @@ class NrModeTest {
     }
 
     @Test
+    fun defaultModeStaysOnNsaAndSa() {
+        // 单选组的默认位置：读不出已知模式时回到 NSA + SA [1,2]，
+        // 也就是 NR 模式开关出现之前写死的那组值。
+        assertEquals(NrMode.NSA_AND_SA, NrMode.DEFAULT)
+        assertContentEquals(intArrayOf(1, 2), NrMode.DEFAULT.toAvailabilities())
+        // prefs 里存的默认值必须和 NrMode.DEFAULT 对得上，否则两侧会各自漂移。
+        assertEquals(NrMode.DEFAULT, NrMode.fromStorageKey(Feature.NR_MODE.defaultValue as String))
+    }
+
+    @Test
     fun formatsActualValueForDisplay() {
         assertEquals("[1, 2]", NrMode.formatAvailabilities(intArrayOf(1, 2)))
         assertEquals("[1]", NrMode.formatAvailabilities(intArrayOf(1)))
