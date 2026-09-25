@@ -19,6 +19,13 @@
 - 旋转屏幕、切换深浅色不再重建界面、不再重复请求；网络状态与配置备份由 ViewModel 保存
 - 日志页批量刷新、缓存过滤结果，离开日志页即停止抓取；日志页不再对外导出
 
+### 构建
+- 新增侧载开发版自动构建（Android Sideload Dev Build）：推送到 `claude/**` 分支、合并进 master 或手动运行时，产出包名带 `.hsujo` 后缀、可与正式版并存的调试包
+- 支持用仓库 secret `SIDELOAD_KEYSTORE_BASE64` 配置固定开发密钥，各次构建签名一致、可覆盖安装；运行摘要显示签名证书 SHA256
+- `signing.gradle` 缺少签名材料时 debug 回退到 Android debug keystore，release 保持不签名
+- 开发版不在开机后自动恢复配置，避免与正式版互相覆盖
+- Android Master CI 未配置官方签名 secret 时跳过，不再报错
+
 ---
 
 ## 3.9.0.r101 (2026-06-20)
