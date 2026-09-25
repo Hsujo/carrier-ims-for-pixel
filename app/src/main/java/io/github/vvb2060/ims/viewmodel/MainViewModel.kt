@@ -1206,6 +1206,16 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     private suspend fun maybeRestoreSavedConfigurationAfterBoot() {
+        // 侧载开发版与官方版操作同一套系统 CarrierConfig。若两者都在启动时静默恢复
+        // 各自保存的旧值，就会互相覆盖，并且会写到用户并未选中的另一张 SIM 上。
+        // 因此开发版只接受用户显式点击触发的写入。
+        if (BuildConfig.SIDE_BY_SIDE_DEV_BUILD) {
+            if (pendingConfigRestoreAfterBoot) {
+                Log.i(TAG, "side-by-side dev build: skipping automatic config restore after boot")
+                pendingConfigRestoreAfterBoot = false
+            }
+            return
+        }
         if (!pendingConfigRestoreAfterBoot || restoringConfigAfterBoot) return
         restoringConfigAfterBoot = true
         try {
