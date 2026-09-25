@@ -1,6 +1,5 @@
 package io.github.vvb2060.ims.ui
 
-import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.app.StatusBarManager
 import android.content.BroadcastReceiver
@@ -10,8 +9,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon as AndroidIcon
 import android.net.Uri
 import android.os.Build
@@ -19,10 +16,6 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import android.telephony.SubscriptionManager
-import android.util.Log
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
@@ -53,7 +46,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cached
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -76,7 +68,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -89,7 +80,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -97,11 +87,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -116,8 +104,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -128,17 +114,12 @@ import io.github.vvb2060.ims.UpdateApkCleanup
 import io.github.vvb2060.ims.model.Feature
 import io.github.vvb2060.ims.model.FeatureValue
 import io.github.vvb2060.ims.model.FeatureValueType
-import io.github.vvb2060.ims.model.AdPlacement
 import io.github.vvb2060.ims.model.ApnDraftConfig
-import io.github.vvb2060.ims.model.BusinessIntentType
-import io.github.vvb2060.ims.model.CommercialAd
 import io.github.vvb2060.ims.model.ConfigBackupSnapshot
 import io.github.vvb2060.ims.model.NetworkExitStatus
 import io.github.vvb2060.ims.model.ShizukuStatus
 import io.github.vvb2060.ims.model.SimSelection
-import io.github.vvb2060.ims.model.SupportPaymentChannel
-import io.github.vvb2060.ims.model.SupportRecord
-import io.github.vvb2060.ims.model.SupportRules
+import io.github.vvb2060.ims.model.ToolRules
 import io.github.vvb2060.ims.model.SystemInfo
 import io.github.vvb2060.ims.privileged.ImsModifier
 import io.github.vvb2060.ims.tiles.SIM1IMSStatusTileService
@@ -172,7 +153,6 @@ private val RELEASES_LATEST_API_URLS = listOf(
 )
 private const val UPDATE_APK_MIME_TYPE = "application/vnd.android.package-archive"
 private const val UNKNOWN_INSTALLER_SOURCE_SETTINGS_SCHEME = "package:"
-private const val SUPPORT_RECORD_DISPLAY_LIMIT = 20
 private val VERSION_DISPLAY_WITH_REV_REGEX = Regex("""\d+\.\d+\.\d+\.[rd]\d+""")
 private val VERSION_DISPLAY_REGEX = Regex("""\d+\.\d+\.\d+""")
 
@@ -194,12 +174,6 @@ private data class CountryIsoOption(
     val labelRes: Int,
 )
 
-private sealed interface RemoteAdImageState {
-    data object Loading : RemoteAdImageState
-    data object Failed : RemoteAdImageState
-    data class Ready(val bitmap: Bitmap) : RemoteAdImageState
-}
-
 private enum class CaptivePortalAction {
     FIX,
     RESTORE,
@@ -211,8 +185,6 @@ private enum class MainTab(
 ) {
     IMS(R.string.tab_ims),
     EXTRA(R.string.tab_extra),
-    SUPPORT(R.string.tab_support),
-    COOPERATION(R.string.tab_cooperation),
     ABOUT(R.string.tab_about),
 }
 
@@ -504,17 +476,9 @@ class MainActivity : BaseActivity() {
         var networkExitChecking by remember { mutableStateOf(false) }
         var networkExitStatus by remember { mutableStateOf<NetworkExitStatus?>(null) }
         var networkExitError by remember { mutableStateOf<String?>(null) }
-        var adFreeEnabled by remember { mutableStateOf(viewModel.isAdFreeEnabled()) }
-        var commercialAds by remember { mutableStateOf<List<CommercialAd>>(emptyList()) }
-        var homeAdToShow by remember { mutableStateOf<CommercialAd?>(null) }
-        var supportPaymentUrl by remember { mutableStateOf<String?>(null) }
-        var supportRecords by remember { mutableStateOf<List<SupportRecord>>(emptyList()) }
-        var supportRecordsLoading by remember { mutableStateOf(false) }
-        var supportRecordsError by remember { mutableStateOf<String?>(null) }
         var apnDraft by remember { mutableStateOf<ApnDraftConfig?>(null) }
         var apnDraftSim by remember { mutableStateOf<SimSelection?>(null) }
         var applyingApn by remember { mutableStateOf(false) }
-        var submittingBusinessIntent by remember { mutableStateOf(false) }
         var configBackups by remember { mutableStateOf<List<ConfigBackupSnapshot>>(emptyList()) }
         var pendingBackupRestore by remember { mutableStateOf<ConfigBackupSnapshot?>(null) }
         var pendingBackupRestoreSim by remember { mutableStateOf<SimSelection?>(null) }
@@ -567,24 +531,6 @@ class MainActivity : BaseActivity() {
         }
         LaunchedEffect(Unit) {
             configBackups = viewModel.loadConfigBackups()
-            if (!adFreeEnabled) {
-                commercialAds = viewModel.fetchCommercialAds().getOrDefault(emptyList())
-                homeAdToShow = commercialAds.firstOrNull {
-                    it.placement == AdPlacement.HOME_POPUP && viewModel.shouldShowHomeAd(it)
-                }
-                homeAdToShow?.let { viewModel.markHomeAdShown(it) }
-            }
-        }
-        LaunchedEffect(selectedTab) {
-            if (selectedTab != MainTab.SUPPORT || !viewModel.isDodopaySupportFeedConfigured()) {
-                return@LaunchedEffect
-            }
-            supportRecordsLoading = true
-            supportRecordsError = null
-            val result = viewModel.fetchSupportRecords()
-            supportRecords = result.getOrDefault(emptyList())
-            supportRecordsError = result.exceptionOrNull()?.message
-            supportRecordsLoading = false
         }
         LaunchedEffect(allSimList) {
             val validSubIds = allSimList.filter { it.subId >= 0 }.map { it.subId }.toSet()
@@ -803,7 +749,7 @@ class MainActivity : BaseActivity() {
                 return@restoreBackup
             }
             if (!allowMismatch &&
-                SupportRules.requiresBackupMismatchConfirmation(backup, sim.mcc, sim.mnc)
+                ToolRules.requiresBackupMismatchConfirmation(backup, sim.mcc, sim.mnc)
             ) {
                 pendingBackupRestore = backup
                 pendingBackupRestoreSim = sim
@@ -853,8 +799,6 @@ class MainActivity : BaseActivity() {
                                     text = when (tab) {
                                         MainTab.IMS -> "IMS"
                                         MainTab.EXTRA -> "+"
-                                        MainTab.SUPPORT -> "$"
-                                        MainTab.COOPERATION -> "AD"
                                         MainTab.ABOUT -> "i"
                                     },
                                     fontSize = 11.sp,
@@ -967,10 +911,6 @@ class MainActivity : BaseActivity() {
                             }
                         },
                         onIssueClick = submitIssueAction,
-                        onDonateClick = {
-                            selectedTab = MainTab.SUPPORT
-                        },
-                        showDonateButton = false,
                     )
                 }
                 if (selectedTab == MainTab.IMS && shizukuStatus == ShizukuStatus.READY) {
@@ -1285,7 +1225,7 @@ class MainActivity : BaseActivity() {
                                 return@ExtraToolsPage
                             }
                             val draft = viewModel.buildSuggestedApnConfig(sim)
-                            val validation = SupportRules.validateApnDraft(draft)
+                            val validation = ToolRules.validateApnDraft(draft)
                             if (validation != null) {
                                 Toast.makeText(
                                     context,
@@ -1326,69 +1266,6 @@ class MainActivity : BaseActivity() {
                         },
                     )
                 }
-                if (selectedTab == MainTab.SUPPORT) {
-                    SupportPage(
-                        supportPaymentConfigured = viewModel.isDodopaySupportConfigured(),
-                        adFreeEnabled = adFreeEnabled,
-                        supportRecordsConfigured = viewModel.isDodopaySupportFeedConfigured(),
-                        supportRecordsLoading = supportRecordsLoading,
-                        supportRecords = supportRecords,
-                        supportRecordsError = supportRecordsError,
-                        onCreateSupportOrder = supportOrder@{ name, message, amount, channel ->
-                            val result = viewModel.buildDodopaySupportUrl(name, message, amount, channel)
-                            val url = result.getOrNull()
-                            if (url == null) {
-                                Toast.makeText(
-                                    context,
-                                    result.exceptionOrNull()?.message
-                                        ?: context.getString(R.string.support_payment_open_failed),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                                return@supportOrder
-                            }
-                            supportPaymentUrl = url
-                        },
-                    )
-                }
-                if (selectedTab == MainTab.COOPERATION) {
-                    CooperationPage(
-                        adsConfigured = viewModel.isAdServiceConfigured(),
-                        businessIntentConfigured = viewModel.isBusinessIntentConfigured(),
-                        businessIntentSubmitting = submittingBusinessIntent,
-                        cooperationAds = if (adFreeEnabled) {
-                            emptyList()
-                        } else {
-                            commercialAds.filter { it.placement == AdPlacement.COOPERATION_CARD }
-                        },
-                        businessContactText = BuildConfig.BUSINESS_CONTACT_TEXT,
-                        businessContactUrl = BuildConfig.BUSINESS_CONTACT_URL,
-                        onOpenAd = { ad ->
-                            if (ad.actionUrl.isNotBlank()) uriHandler.openUri(ad.actionUrl)
-                        },
-                        onSubmitBusinessIntent = { intentType, name, contact, message ->
-                            scope.launch {
-                                submittingBusinessIntent = true
-                                val result = viewModel.submitBusinessIntent(intentType, name, contact, message)
-                                submittingBusinessIntent = false
-                                if (result.isSuccess) {
-                                    Toast.makeText(context, R.string.business_intent_success, Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(
-                                            R.string.business_intent_failed,
-                                            result.exceptionOrNull()?.message ?: "unknown"
-                                        ),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
-                        },
-                        onOpenBusinessContact = { url ->
-                            if (url.isNotBlank()) uriHandler.openUri(url)
-                        },
-                    )
-                }
                 if (selectedTab == MainTab.ABOUT && issueFailureLogs.isNotBlank()) {
                     IssueReportHintCard(
                         onSubmitIssue = submitIssueAction
@@ -1396,58 +1273,6 @@ class MainActivity : BaseActivity() {
                 }
                 Spacer(modifier = Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
 
-                if (!adFreeEnabled) homeAdToShow?.let { ad ->
-                    CommercialAdDialog(
-                        ad = ad,
-                        onOpen = {
-                            homeAdToShow = null
-                            if (ad.actionUrl.isNotBlank()) uriHandler.openUri(ad.actionUrl)
-                        },
-                        onDismiss = {
-                            viewModel.dismissHomeAd(ad)
-                            homeAdToShow = null
-                        }
-                    )
-                }
-                supportPaymentUrl?.let { url ->
-                    SupportPaymentDialog(
-                        url = url,
-                        onCancelPendingOrder = { orderId ->
-                            scope.launch {
-                                val result = viewModel.cancelDodopaySupportOrder(orderId)
-                                result.exceptionOrNull()?.let { error ->
-                                    Log.w("MainActivity", "cancel DoDoPay support order failed: $orderId, msg=${error.message}")
-                                }
-                            }
-                        },
-                        onDismiss = { paymentProof ->
-                            supportPaymentUrl = null
-                            if (paymentProof != null) {
-                                scope.launch {
-                                    val result = viewModel.verifyDodopayPaymentProof(paymentProof)
-                                    if (result.getOrDefault(false)) {
-                                        adFreeEnabled = true
-                                        commercialAds = emptyList()
-                                        homeAdToShow = null
-                                        Toast.makeText(context, R.string.support_ad_free_verified, Toast.LENGTH_SHORT).show()
-                                    } else if (result.isFailure) {
-                                        Toast.makeText(context, R.string.support_ad_free_verify_failed, Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            }
-                            if (viewModel.isDodopaySupportFeedConfigured()) {
-                                scope.launch {
-                                    supportRecordsLoading = true
-                                    supportRecordsError = null
-                                    val result = viewModel.fetchSupportRecords()
-                                    supportRecords = result.getOrDefault(emptyList())
-                                    supportRecordsError = result.exceptionOrNull()?.message
-                                    supportRecordsLoading = false
-                                }
-                            }
-                        },
-                    )
-                }
                 apnDraft?.let { draft ->
                     ApnConfirmDialog(
                         draft = draft,
@@ -2284,747 +2109,6 @@ private fun ConfigBackupCard(
 }
 
 @Composable
-private fun SupportPage(
-    supportPaymentConfigured: Boolean,
-    adFreeEnabled: Boolean,
-    supportRecordsConfigured: Boolean,
-    supportRecordsLoading: Boolean,
-    supportRecords: List<SupportRecord>,
-    supportRecordsError: String?,
-    onCreateSupportOrder: (String, String, String, SupportPaymentChannel) -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("9.90") }
-    val amountValid = SupportRules.normalizeSupportAmount(amount) != null
-    val supportEnabled = supportPaymentConfigured && amountValid
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(stringResource(R.string.support_message_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            if (!supportPaymentConfigured) {
-                Text(
-                    text = stringResource(R.string.support_payment_not_configured),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-            Text(
-                text = stringResource(
-                    if (adFreeEnabled) {
-                        R.string.support_ad_free_enabled
-                    } else {
-                        R.string.support_ad_free_hint
-                    }
-                ),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.outline,
-            )
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it.take(24) },
-                label = { Text(stringResource(R.string.support_name_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = message,
-                onValueChange = { message = it.take(120) },
-                label = { Text(stringResource(R.string.support_message_label)) },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2,
-                maxLines = 4,
-            )
-            OutlinedTextField(
-                value = amount,
-                onValueChange = { raw -> amount = raw.filter { it.isDigit() || it == '.' }.take(8) },
-                label = { Text(stringResource(R.string.support_amount_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("9.90", "30", "100").forEach { preset ->
-                    AssistChip(
-                        onClick = { amount = preset },
-                        label = { Text("¥$preset") },
-                    )
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { onCreateSupportOrder(name, message, amount, SupportPaymentChannel.ALIPAY) },
-                    enabled = supportEnabled,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                ) {
-                    Text(stringResource(R.string.support_pay_alipay))
-                }
-                OutlinedButton(
-                    onClick = { onCreateSupportOrder(name, message, amount, SupportPaymentChannel.WECHAT) },
-                    enabled = supportEnabled,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                ) {
-                    Text(stringResource(R.string.support_pay_wechat))
-                }
-            }
-        }
-    }
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.support_records_title),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            when {
-                !supportRecordsConfigured -> {
-                    Text(
-                        text = stringResource(R.string.support_records_dodopay_note),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                supportRecordsLoading -> {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Text(
-                        text = stringResource(R.string.support_records_loading),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                supportRecordsError != null -> {
-                    Text(
-                        text = stringResource(R.string.support_records_load_failed),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                supportRecords.isEmpty() -> {
-                    Text(
-                        text = stringResource(R.string.support_records_empty),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                else -> {
-                    val visibleRecords = supportRecords.take(SUPPORT_RECORD_DISPLAY_LIMIT)
-                    if (supportRecords.size > visibleRecords.size) {
-                        Text(
-                            text = stringResource(R.string.support_records_recent_limit, visibleRecords.size),
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        visibleRecords.forEach { record ->
-                            SupportRecordRow(record)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SupportRecordRow(record: SupportRecord) {
-    val name = record.payerName.ifBlank { stringResource(R.string.support_records_anonymous) }
-    val message = record.payerMessage.ifBlank { stringResource(R.string.support_records_no_message) }
-    val reply = record.authorReply.trim()
-    val replyMeta = formatSupportPaidAt(record.authorRepliedAt)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = name,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            ) {
-                Text(
-                    text = "¥${record.amount}",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        }
-        Text(
-            text = message,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (reply.isNotBlank()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Text(
-                    text = listOf(stringResource(R.string.support_records_author_reply), replyMeta)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" · "),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = reply,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        Text(
-            text = listOf(formatSupportPaidAt(record.paidAt), record.channel)
-                .filter { it.isNotBlank() }
-                .joinToString(" · "),
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.outline,
-        )
-    }
-}
-
-private fun formatSupportPaidAt(value: String): String {
-    return SupportRules.formatIsoDateTimeForDisplay(value)
-}
-
-@Composable
-private fun CooperationPage(
-    adsConfigured: Boolean,
-    businessIntentConfigured: Boolean,
-    businessIntentSubmitting: Boolean,
-    cooperationAds: List<CommercialAd>,
-    businessContactText: String,
-    businessContactUrl: String,
-    onOpenAd: (CommercialAd) -> Unit,
-    onSubmitBusinessIntent: (BusinessIntentType, String, String, String) -> Unit,
-    onOpenBusinessContact: (String) -> Unit,
-) {
-    var businessIntentType by remember { mutableStateOf(BusinessIntentType.ADS) }
-    var businessName by remember { mutableStateOf("") }
-    var businessContact by remember { mutableStateOf("") }
-    var businessMessage by remember { mutableStateOf("") }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(stringResource(R.string.business_contact_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text(stringResource(R.string.business_contact_desc), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-            if (!businessIntentConfigured) {
-                Text(
-                    text = stringResource(R.string.business_intent_not_configured),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-            OutlinedTextField(
-                value = businessName,
-                onValueChange = { businessName = it.take(40) },
-                label = { Text(stringResource(R.string.business_name_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = businessContact,
-                onValueChange = { businessContact = it.take(120) },
-                label = { Text(stringResource(R.string.business_contact_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            BusinessIntentTypeField(
-                value = businessIntentType,
-                onValueChange = { businessIntentType = it },
-            )
-            OutlinedTextField(
-                value = businessMessage,
-                onValueChange = { businessMessage = it.take(500) },
-                label = { Text(stringResource(R.string.business_message_label)) },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2,
-                maxLines = 4,
-            )
-            Button(
-                onClick = {
-                    onSubmitBusinessIntent(
-                        businessIntentType,
-                        businessName,
-                        businessContact,
-                        businessMessage
-                    )
-                },
-                enabled = businessIntentConfigured &&
-                    !businessIntentSubmitting &&
-                    businessContact.isNotBlank() &&
-                    businessMessage.isNotBlank(),
-                modifier = Modifier.height(44.dp)
-            ) {
-                Text(
-                    stringResource(
-                        if (businessIntentSubmitting) {
-                            R.string.business_intent_submitting
-                        } else {
-                            R.string.business_intent_submit
-                        }
-                    )
-                )
-            }
-            if (!businessIntentConfigured && businessContactText.isNotBlank()) {
-                Text(
-                    text = businessContactText,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-            if (!businessIntentConfigured && businessContactUrl.isNotBlank()) {
-                TextButton(onClick = { onOpenBusinessContact(businessContactUrl) }) {
-                    Text(stringResource(R.string.business_contact_action))
-                }
-            }
-            if (!adsConfigured) {
-                Text(stringResource(R.string.ads_service_not_configured), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-            }
-            cooperationAds.forEach { ad ->
-                CommercialAdInlineCard(ad = ad, onOpen = { onOpenAd(ad) })
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun BusinessIntentTypeField(
-    value: BusinessIntentType,
-    onValueChange: (BusinessIntentType) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-    ) {
-        OutlinedTextField(
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-            value = businessIntentTypeText(value),
-            onValueChange = {},
-            readOnly = true,
-            singleLine = true,
-            label = { Text(stringResource(R.string.business_type_label)) },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            BusinessIntentType.entries.forEach { type ->
-                DropdownMenuItem(
-                    text = { Text(businessIntentTypeText(type)) },
-                    onClick = {
-                        expanded = false
-                        onValueChange(type)
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun businessIntentTypeText(type: BusinessIntentType): String {
-    return stringResource(
-        when (type) {
-            BusinessIntentType.ADS -> R.string.business_type_ads
-            BusinessIntentType.DEVELOPMENT -> R.string.business_type_development
-            BusinessIntentType.TOKEN_SUPPLY -> R.string.business_type_token_supply
-            BusinessIntentType.OTHER -> R.string.business_type_other
-        }
-    )
-}
-
-@Composable
-private fun CommercialAdInlineCard(
-    ad: CommercialAd,
-    onOpen: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .clickable(enabled = ad.actionUrl.isNotBlank(), onClick = onOpen)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (ad.imageUrl.isNotBlank()) {
-            RemoteAdImage(
-                ad = ad,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 180.dp)
-                    .clip(RoundedCornerShape(8.dp))
-            )
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                if (ad.title.isNotBlank()) {
-                    Text(ad.title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                }
-                if (ad.body.isNotBlank()) {
-                    Text(ad.body, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                }
-            }
-            if (ad.actionUrl.isNotBlank()) {
-                Text(ad.actionLabel, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-            }
-        }
-    }
-}
-
-@Composable
-private fun RemoteAdImage(
-    ad: CommercialAd,
-    modifier: Modifier = Modifier,
-) {
-    val state by produceState<RemoteAdImageState>(
-        initialValue = RemoteAdImageState.Loading,
-        key1 = ad.imageUrl,
-    ) {
-        value = loadRemoteAdImage(ad.imageUrl)?.let(RemoteAdImageState::Ready)
-            ?: RemoteAdImageState.Failed
-    }
-    when (val current = state) {
-        RemoteAdImageState.Loading -> {
-            Box(
-                modifier = modifier
-                    .height(120.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = stringResource(R.string.ad_image_loading),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-        }
-
-        RemoteAdImageState.Failed -> {
-            Box(
-                modifier = modifier
-                    .height(120.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = stringResource(R.string.ad_image_failed),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-        }
-
-        is RemoteAdImageState.Ready -> {
-            Image(
-                bitmap = current.bitmap.asImageBitmap(),
-                contentDescription = ad.altText.ifBlank { ad.title },
-                contentScale = ad.imageContentScale(),
-                modifier = modifier,
-            )
-        }
-    }
-}
-
-private suspend fun loadRemoteAdImage(imageUrl: String): Bitmap? = withContext(Dispatchers.IO) {
-    if (imageUrl.isBlank()) return@withContext null
-    val connection = (URL(imageUrl).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 4_000
-        readTimeout = 4_000
-        instanceFollowRedirects = true
-    }
-    try {
-        if (connection.responseCode !in 200..299) return@withContext null
-        connection.inputStream.use { input ->
-            BitmapFactory.decodeStream(input)
-        }
-    } catch (_: Throwable) {
-        null
-    } finally {
-        connection.disconnect()
-    }
-}
-
-private fun CommercialAd.imageContentScale(): ContentScale {
-    return when (imageFit.lowercase(Locale.US)) {
-        "cover" -> ContentScale.Crop
-        "fill" -> ContentScale.FillBounds
-        else -> ContentScale.Fit
-    }
-}
-
-@Composable
-private fun DialogCloseButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .size(40.dp)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(30.dp)
-                .background(
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
-                    shape = RoundedCornerShape(15.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Close,
-                contentDescription = stringResource(R.string.action_close),
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CommercialAdDialog(
-    ad: CommercialAd,
-    onOpen: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(0.96f),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        ) {
-            Column(
-                modifier = Modifier.padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (ad.imageUrl.isNotBlank()) {
-                    val imageModifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 640.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .then(if (ad.actionUrl.isNotBlank()) Modifier.clickable(onClick = onOpen) else Modifier)
-                    Box {
-                        RemoteAdImage(
-                            ad = ad,
-                            modifier = imageModifier,
-                        )
-                        DialogCloseButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp),
-                        )
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        DialogCloseButton(onClick = onDismiss)
-                    }
-                }
-                if (ad.title.isNotBlank() || ad.body.isNotBlank()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (ad.title.isNotBlank()) {
-                            Text(ad.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        if (ad.body.isNotBlank()) {
-                            Text(ad.body, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                        }
-                    }
-                }
-                Text(
-                    text = stringResource(R.string.home_ad_disclosure),
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-        }
-    }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun SupportPaymentDialog(
-    url: String,
-    onCancelPendingOrder: (String) -> Unit,
-    onDismiss: (String?) -> Unit,
-) {
-    val dialogHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.88f).coerceAtMost(720.dp)
-    val context = LocalContext.current
-    var currentOrderId by remember(url) { mutableStateOf<String?>(null) }
-    var dismissed by remember(url) { mutableStateOf(false) }
-    fun dismissFromDodopay(paymentProof: String) {
-        if (dismissed) return
-        dismissed = true
-        onDismiss(paymentProof)
-    }
-    fun dismissByUser() {
-        if (dismissed) return
-        dismissed = true
-        currentOrderId?.let(onCancelPendingOrder)
-        onDismiss(null)
-    }
-    Dialog(
-        onDismissRequest = { dismissByUser() },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth(0.96f)
-                .height(dialogHeight),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.support_payment_page_title),
-                        modifier = Modifier.padding(start = 6.dp),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    DialogCloseButton(onClick = { dismissByUser() })
-                }
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp)),
-                    factory = { context ->
-                        WebView(context).apply {
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageStarted(
-                                    view: WebView?,
-                                    url: String?,
-                                    favicon: Bitmap?,
-                                ) {
-                                    url?.let { nextUrl ->
-                                        SupportRules.extractDodopayPayOrderId(nextUrl)?.let { orderId ->
-                                            currentOrderId = orderId
-                                        }
-                                    }
-                                }
-
-                                override fun shouldOverrideUrlLoading(
-                                    view: WebView?,
-                                    request: WebResourceRequest?,
-                                ): Boolean {
-                                    val nextUrl = request?.url?.toString().orEmpty()
-                                    SupportRules.extractDodopayPayOrderId(nextUrl)?.let { orderId ->
-                                        currentOrderId = orderId
-                                    }
-                                    if (SupportRules.isDodopayCheckoutCloseUrl(nextUrl)) {
-                                        if (SupportRules.isDodopayCheckoutCloseReady(nextUrl)) {
-                                            SupportRules.extractDodopayPaymentProof(nextUrl)?.let { paymentProof ->
-                                                dismissFromDodopay(paymentProof)
-                                            }
-                                        } else {
-                                            Toast.makeText(
-                                                context,
-                                                R.string.support_payment_waiting_confirmation,
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                        return true
-                                    }
-                                    return false
-                                }
-                            }
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.loadWithOverviewMode = true
-                            settings.useWideViewPort = true
-                            loadUrl(url)
-                        }
-                    },
-                    update = {},
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun ApnConfirmDialog(
     draft: ApnDraftConfig,
     applying: Boolean,
@@ -3121,8 +2205,6 @@ fun SystemInfoCard(
     onCheckUpdate: () -> Unit,
     onLogcatClick: () -> Unit,
     onIssueClick: () -> Unit,
-    onDonateClick: () -> Unit,
-    showDonateButton: Boolean = true,
 ) {
     val uriHandler = LocalUriHandler.current
     val shizukuStatusText = when (shizukuStatus) {
@@ -3249,27 +2331,6 @@ fun SystemInfoCard(
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(onClick = onRequestShizukuPermission) {
                     Text(text = stringResource(id = R.string.request_permission))
-                }
-            }
-            if (showDonateButton) {
-                Spacer(modifier = Modifier.height(8.dp))
-                HorizontalDivider(thickness = 0.5.dp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = onDonateClick,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                ) {
-                    Text(
-                        text = stringResource(R.string.donation_action),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
                 }
             }
         }
