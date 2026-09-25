@@ -98,10 +98,6 @@
         android:label="SimReader"
         android:targetPackage="${applicationId}" />
     <instrumentation
-        android:name="io.github.vvb2060.ims.privileged.BrokerInstrumentation"
-        android:label="BrokerInstrumentation"
-        android:targetPackage="${applicationId}" />
-    <instrumentation
         android:name="io.github.vvb2060.ims.privileged.ConfigReader"
         android:label="ConfigReader"
         android:targetPackage="${applicationId}" />

@@ -13,7 +13,6 @@ import android.util.Log
 import io.github.vvb2060.ims.model.SimSelection
 import io.github.vvb2060.ims.model.ApnDraftConfig
 import io.github.vvb2060.ims.privileged.ApnModifier
-import io.github.vvb2060.ims.privileged.BrokerInstrumentation
 import io.github.vvb2060.ims.privileged.CaptivePortalFixer
 import io.github.vvb2060.ims.privileged.ConfigReader
 import io.github.vvb2060.ims.privileged.ImsResetter
@@ -21,6 +20,7 @@ import io.github.vvb2060.ims.privileged.ImsStatusReader
 import io.github.vvb2060.ims.privileged.ImsModifier
 import io.github.vvb2060.ims.privileged.SimReader
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
@@ -40,8 +40,13 @@ class ShizukuProvider : ShizukuProvider() {
 
     companion object {
         private const val TAG = "ShizukuProvider"
-        private const val INSTRUMENTATION_RESULT_TIMEOUT_MS = 15_000L
+        private const val INSTRUMENTATION_RESULT_TIMEOUT_MS = 10_000L
         private val instrumentationMutex = Mutex()
+
+        data class CarrierConfigState(
+            val config: Bundle?,
+            val imsRegistered: Boolean?,
+        )
 
         data class CaptivePortalConfig(
             val httpUrl: String,
@@ -51,18 +56,15 @@ class ShizukuProvider : ShizukuProvider() {
         )
 
         suspend fun overrideImsConfig(context: Context, data: Bundle): String? {
-            val primaryArgs = Bundle(data)
-            val result = startInstrumentation(context, ImsModifier::class.java, primaryArgs, true)
+            val result = startInstrumentation(context, ImsModifier::class.java, Bundle(data), true)
             if (result == null) {
                 Log.w(TAG, "overrideImsConfig: failed with empty result")
-                return tryOverrideWithBroker(context, data, "failed with empty result")
+                return "failed with empty result"
             }
             if (result.getBoolean(ImsModifier.BUNDLE_RESULT)) {
                 return null
             }
-            val msg = result.getString(ImsModifier.BUNDLE_RESULT_MSG) ?: "unknown error"
-            // Retry via broker when persistent override is restricted or result is empty.
-            return tryOverrideWithBroker(context, data, msg)
+            return result.getString(ImsModifier.BUNDLE_RESULT_MSG) ?: "unknown error"
         }
 
         suspend fun readSimInfoList(context: Context): List<SimSelection> {
@@ -109,6 +111,24 @@ class ShizukuProvider : ShizukuProvider() {
                 return null
             }
             return value
+        }
+
+        suspend fun readCarrierConfigWithImsStatus(
+            context: Context,
+            subId: Int,
+            keys: Array<String>,
+        ): CarrierConfigState {
+            val args = Bundle().apply {
+                putInt(ConfigReader.BUNDLE_SELECT_SIM_ID, subId)
+                putStringArray(ConfigReader.BUNDLE_KEYS, keys)
+                putBoolean(ConfigReader.BUNDLE_WITH_IMS_STATUS, true)
+            }
+            val result = startInstrumentation(context, ConfigReader::class.java, args, true)
+                ?: return CarrierConfigState(null, null)
+            return CarrierConfigState(
+                config = result.rawValue(ConfigReader.BUNDLE_RESULT) as? Bundle,
+                imsRegistered = result.rawValue(ConfigReader.BUNDLE_IMS_REGISTERED) as? Boolean,
+            )
         }
 
         suspend fun dumpCarrierConfig(context: Context, subId: Int): String? {
@@ -273,15 +293,19 @@ class ShizukuProvider : ShizukuProvider() {
                 }
             }
 
-            val binder = ServiceManager.getService(Context.ACTIVITY_SERVICE)
-            val am = IActivityManager.Stub.asInterface(ShizukuBinderWrapper(binder))
             val name = ComponentName(context, cls)
             val flags = 8 // ActivityManager.INSTR_FLAG_NO_RESTART
-            val connection = UiAutomationConnection()
             var started = false
             try {
                 Log.d(TAG, "startInstrumentation: call with component: $name")
-                am.startInstrumentation(name, null, flags, args, watcher, connection, 0, null)
+                // AMS 调用经 Shizuku 转发，放到 IO 线程，避免阻塞调用方（通常是主线程）；
+                // 不可取消，保证「已启动」与持锁等待结果的状态一致
+                withContext(Dispatchers.IO + NonCancellable) {
+                    val binder = ServiceManager.getService(Context.ACTIVITY_SERVICE)
+                    val am = IActivityManager.Stub.asInterface(ShizukuBinderWrapper(binder))
+                    val connection = UiAutomationConnection()
+                    am.startInstrumentation(name, null, flags, args, watcher, connection, 0, null)
+                }
                 started = true
                 Log.i(TAG, "instrumentation started successfully")
                 if (receiveResult) {
@@ -303,36 +327,6 @@ class ShizukuProvider : ShizukuProvider() {
                 Log.e(TAG, "failed to start instrumentation", e)
                 return null
             }
-        }
-
-        private suspend fun tryOverrideWithBroker(
-            context: Context,
-            data: Bundle,
-            msg: String,
-        ): String? {
-            if (!shouldRetryWithBroker(msg)) {
-                return msg
-            }
-            val brokerArgs = Bundle(data)
-            val brokerResult =
-                startInstrumentation(context, BrokerInstrumentation::class.java, brokerArgs, true)
-            if (brokerResult == null) {
-                Log.w(TAG, "overrideImsConfig: broker failed with empty result")
-                return msg
-            }
-            if (brokerResult.getBoolean(ImsModifier.BUNDLE_RESULT)) {
-                return null
-            }
-            return brokerResult.getString(ImsModifier.BUNDLE_RESULT_MSG) ?: msg
-        }
-
-        private fun shouldRetryWithBroker(message: String): Boolean {
-            val lower = message.lowercase()
-            return lower.contains("persistent=true") ||
-                lower.contains("system app") ||
-                lower.contains("securityexception") ||
-                lower.contains("security exception") ||
-                lower.contains("empty result")
         }
 
         @Suppress("DEPRECATION")

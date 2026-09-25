@@ -8,6 +8,7 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.telephony.CarrierConfigManager
+import android.telephony.SubscriptionManager
 import android.util.Log
 import io.github.vvb2060.ims.ShizukuProvider
 import io.github.vvb2060.ims.ui.MainActivity
@@ -40,6 +41,15 @@ abstract class BaseSimTileService : TileService() {
     }
 
     protected suspend fun resolveSubId(): Int? {
+        // Android 14+ 可直接按卡槽查询 subId，无需每次下拉通知栏都走一次特权调用读取 SIM 列表
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val subId = runCatching { SubscriptionManager.getSubscriptionId(simSlotIndex) }
+                .onFailure { Log.w(TAG, "getSubscriptionId failed for slot $simSlotIndex", it) }
+                .getOrNull()
+            if (subId != null) {
+                return subId.takeIf { SubscriptionManager.isValidSubscriptionId(it) }
+            }
+        }
         val sims = ShizukuProvider.readSimInfoList(applicationContext)
         return sims.firstOrNull { it.simSlotIndex == simSlotIndex }?.subId
     }

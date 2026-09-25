@@ -2,7 +2,6 @@ package io.github.vvb2060.ims.privileged
 
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
@@ -15,10 +14,9 @@ import android.util.Log
 import com.android.internal.telephony.ITelephony
 import io.github.vvb2060.ims.LogcatRepository
 import io.github.vvb2060.ims.model.FeatureConfigMapper
-import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 
-class ImsModifier : Instrumentation() {
+class ImsModifier : BackgroundInstrumentation() {
     companion object Companion {
         private const val TAG = "ImsModifier"
         private const val KEY_NR_ADVANCED_THRESHOLD_BANDWIDTH_KHZ = "nr_advanced_threshold_bandwidth_khz_int"
@@ -175,24 +173,10 @@ class ImsModifier : Instrumentation() {
         }
     }
 
-    override fun onCreate(arguments: Bundle) {
-        // 等待 Shizuku binder 准备好
-        var index = 0
-        val maxRetries = 50 // 最多等待 5 秒
-        while (!Shizuku.pingBinder()) {
-            index++
-            Log.d(TAG, "wait for shizuku binder ready")
-            try {
-                Thread.sleep(100)
-            } catch (_: InterruptedException) {
-                break
-            }
-            if (index >= maxRetries) {
-                break
-            }
-        }
+    override fun execute(arguments: Bundle?) {
+        // 检查 Shizuku binder 是否就绪（与 App 同进程，binder 已收到时无需等待）
         val results = Bundle()
-        if (index >= maxRetries) {
+        if (!isShizukuBinderReady()) {
             results.putBoolean(BUNDLE_RESULT, false)
             results.putString(BUNDLE_RESULT_MSG, "shizuku binder is not ready")
             finish(Activity.RESULT_OK, results)
@@ -201,7 +185,7 @@ class ImsModifier : Instrumentation() {
         Log.i(TAG, "shizuku binder is ready")
 
         try {
-            overrideConfig(arguments)
+            overrideConfig(arguments ?: Bundle())
             if (LogcatRepository.isCapturing()) {
                 Log.i(TAG, "overrideConfig success")
             }

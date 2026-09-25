@@ -3,7 +3,6 @@ package io.github.vvb2060.ims.privileged
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.Context
 import android.os.Bundle
 import android.os.ServiceManager
@@ -14,21 +13,15 @@ import android.util.Log
 import com.android.internal.telephony.ISub
 import rikka.shizuku.ShizukuBinderWrapper
 
-class SimReader : Instrumentation() {
+class SimReader : BackgroundInstrumentation() {
     companion object {
         private const val TAG = "SimReader"
         const val BUNDLE_RESULT = "sim_list"
     }
 
-    override fun onCreate(arguments: Bundle?) {
-        super.onCreate(arguments)
-        start()
-    }
-
     @SuppressLint("MissingPermission")
-    override fun start() {
-        super.start()
-        if (!waitForShizukuBinderReady()) {
+    override fun execute(arguments: Bundle?) {
+        if (!isShizukuBinderReady()) {
             finish(Activity.RESULT_CANCELED, Bundle())
             return
         }

@@ -454,11 +454,12 @@ class MainActivity : BaseActivity() {
         LaunchedEffect(selectedSim, shizukuStatus, allSimList) {
             val currentSelected = selectedSim ?: return@LaunchedEffect
             committedFeatureSwitches.clear()
-            val currentConfig = if (shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0) {
-                viewModel.loadCurrentConfiguration(currentSelected.subId)
+            val currentState = if (shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0) {
+                viewModel.loadCurrentState(currentSelected.subId)
             } else {
                 null
             }
+            val currentConfig = currentState?.features
             if (currentConfig != null) {
                 committedFeatureSwitches.putAll(currentConfig)
             } else {
@@ -471,12 +472,7 @@ class MainActivity : BaseActivity() {
             }
             syncFeatureState(featureSwitches, committedFeatureSwitches)
             if (currentSelected.subId >= 0) {
-                imsRegistrationStatusMap[currentSelected.subId] =
-                    if (shizukuStatus == ShizukuStatus.READY) {
-                        viewModel.readImsRegistrationStatus(currentSelected.subId)
-                    } else {
-                        null
-                    }
+                imsRegistrationStatusMap[currentSelected.subId] = currentState?.imsRegistered
             } else {
                 allSimList.filter { it.subId >= 0 }.forEach { sim ->
                     imsRegistrationStatusMap[sim.subId] =
@@ -849,12 +845,12 @@ class MainActivity : BaseActivity() {
                                 try {
                                     val success = viewModel.onResetConfiguration(sim)
                                     if (!success) return@launch
-                                    val currentConfig = viewModel.loadCurrentConfiguration(sim.subId)
+                                    val currentState = viewModel.loadCurrentState(sim.subId)
+                                    val currentConfig = currentState.features
                                     if (currentConfig != null) {
                                         syncFeatureState(committedFeatureSwitches, currentConfig)
                                         syncFeatureState(featureSwitches, committedFeatureSwitches)
-                                        imsRegistrationStatusMap[sim.subId] =
-                                            viewModel.readImsRegistrationStatus(sim.subId)
+                                        imsRegistrationStatusMap[sim.subId] = currentState.imsRegistered
                                     } else {
                                         syncFeatureState(committedFeatureSwitches, viewModel.loadDefaultPreferences())
                                         syncFeatureState(featureSwitches, committedFeatureSwitches)

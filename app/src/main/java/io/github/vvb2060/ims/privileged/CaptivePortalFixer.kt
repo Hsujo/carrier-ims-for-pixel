@@ -2,7 +2,6 @@ package io.github.vvb2060.ims.privileged
 
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.Context
 import android.os.Bundle
 import android.os.ServiceManager
@@ -11,7 +10,7 @@ import android.system.Os
 import android.util.Log
 import rikka.shizuku.ShizukuBinderWrapper
 
-class CaptivePortalFixer : Instrumentation() {
+class CaptivePortalFixer : BackgroundInstrumentation() {
     companion object {
         private const val TAG = "CaptivePortalFixer"
         private const val KEY_CAPTIVE_PORTAL_HTTP_URL = "captive_portal_http_url"
@@ -36,10 +35,9 @@ class CaptivePortalFixer : Instrumentation() {
         fun actionRestoreDefault(): String = ACTION_RESTORE_DEFAULT
     }
 
-    override fun onCreate(arguments: Bundle?) {
-        super.onCreate(arguments)
+    override fun execute(arguments: Bundle?) {
         val result = Bundle()
-        if (!waitForShizukuBinderReady()) {
+        if (!isShizukuBinderReady()) {
             result.putBoolean(BUNDLE_RESULT, false)
             result.putString(BUNDLE_RESULT_MSG, "shizuku binder is not ready")
             finish(Activity.RESULT_OK, result)

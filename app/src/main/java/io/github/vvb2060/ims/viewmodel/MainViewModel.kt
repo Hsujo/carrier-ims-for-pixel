@@ -92,6 +92,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val failed: Int,
     )
 
+    data class SimConfigState(
+        val features: Map<Feature, FeatureValue>?,
+        val imsRegistered: Boolean?,
+    )
+
     data class ImsRegisterResult(
         val registered: Boolean?,
         val backendErrorMessage: String?,
@@ -481,14 +486,20 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         return map
     }
 
-    suspend fun loadCurrentConfiguration(subId: Int): Map<Feature, FeatureValue>? {
-        if (subId < 0) return null
-        val bundle = ShizukuProvider.readCarrierConfig(
+    /**
+     * 一次特权调用同时读取当前 CarrierConfig 功能状态与 IMS 注册状态。
+     */
+    suspend fun loadCurrentState(subId: Int): SimConfigState {
+        if (subId < 0) return SimConfigState(null, null)
+        val state = ShizukuProvider.readCarrierConfigWithImsStatus(
             application,
             subId,
             FeatureConfigMapper.readKeys
-        ) ?: return null
-        return FeatureConfigMapper.fromBundle(bundle)
+        )
+        return SimConfigState(
+            features = state.config?.let { FeatureConfigMapper.fromBundle(it) },
+            imsRegistered = state.imsRegistered,
+        )
     }
 
     suspend fun readImsRegistrationStatus(subId: Int): Boolean? {
