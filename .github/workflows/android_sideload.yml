@@ -72,9 +72,15 @@ jobs:
           # 签名证书指纹换成与 keytool 相同的格式，方便和本地密钥核对
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
           CERTS=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)
-          DN=$(echo "$CERTS" | sed -n 's/^Signer #1 certificate DN: //p')
-          SHA256=$(echo "$CERTS" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+          # 不同 build-tools 版本的前缀不同（如 "Signer #1 certificate DN:"、"V2 Signer: certificate DN:"），
+          # 只按 "certificate DN:" / "certificate SHA-256 digest:" 匹配
+          DN=$(echo "$CERTS" | sed -n 's/.*certificate DN: //p' | head -n 1)
+          SHA256=$(echo "$CERTS" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n 1 \
             | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')
+          if [ -z "$SHA256" ]; then
+            echo "::warning::未能从 apksigner 输出解析签名证书，原始输出如下"
+            echo "$CERTS"
+          fi
           echo "signing certificate DN: $DN"
           echo "signing certificate SHA256: $SHA256"
           {
