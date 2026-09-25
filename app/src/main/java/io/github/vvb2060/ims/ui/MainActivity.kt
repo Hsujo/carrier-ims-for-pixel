@@ -1,19 +1,13 @@
 package io.github.vvb2060.ims.ui
 
-import android.app.DownloadManager
 import android.app.StatusBarManager
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.drawable.Icon as AndroidIcon
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.Settings
 import android.telephony.SubscriptionManager
 import android.widget.Toast
@@ -95,22 +89,15 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.FileProvider
-import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.vvb2060.ims.BuildConfig
 import io.github.vvb2060.ims.R
-import io.github.vvb2060.ims.UpdateApkCleanup
 import io.github.vvb2060.ims.model.Feature
 import io.github.vvb2060.ims.model.FeatureValue
 import io.github.vvb2060.ims.model.FeatureValueType
@@ -127,45 +114,19 @@ import io.github.vvb2060.ims.tiles.SIM1VoLTETileService
 import io.github.vvb2060.ims.tiles.SIM2IMSStatusTileService
 import io.github.vvb2060.ims.tiles.SIM2VoLTETileService
 import io.github.vvb2060.ims.viewmodel.MainViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.io.File
 import java.text.SimpleDateFormat
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Date
 import java.util.Locale
 
 private const val COUNTRY_ISO_OPTION_DEFAULT = "__default__"
 private const val COUNTRY_ISO_OPTION_OTHER = "__other__"
-private const val REPO_URL = "https://github.com/ryfineZ/carrier-ims-for-pixel"
-private const val REPO_ISSUE_URL = "https://github.com/ryfineZ/carrier-ims-for-pixel/issues/new"
-private const val REPO_OWNER = "ryfineZ"
-private const val REPO_NAME = "carrier-ims-for-pixel"
-private const val LEGACY_REPO_NAME = "TurboIMS"
-private val RELEASES_LATEST_API_URLS = listOf(
-    "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest",
-    "https://api.github.com/repos/$REPO_OWNER/$LEGACY_REPO_NAME/releases/latest",
-)
-private const val UPDATE_APK_MIME_TYPE = "application/vnd.android.package-archive"
-private const val UNKNOWN_INSTALLER_SOURCE_SETTINGS_SCHEME = "package:"
+private const val REPO_URL = "https://github.com/Hsujo/carrier-ims-for-pixel"
+private const val REPO_ISSUE_URL = "https://github.com/Hsujo/carrier-ims-for-pixel/issues/new"
 private val VERSION_DISPLAY_WITH_REV_REGEX = Regex("""\d+\.\d+\.\d+\.[rd]\d+""")
 private val VERSION_DISPLAY_REGEX = Regex("""\d+\.\d+\.\d+""")
-
-private data class ReleaseInfo(
-    val version: String,
-    val downloadUrl: String,
-    val releaseNotes: String,
-)
-
-private data class UpdateDialogState(
-    val currentVersion: String,
-    val latest: ReleaseInfo,
-)
 
 private data class CountryIsoOption(
     val key: String,
@@ -423,26 +384,6 @@ private fun buildEditableConfigSnapshotText(
 
 class MainActivity : BaseActivity() {
     private val viewModel: MainViewModel by viewModels()
-    private var pendingUpdateDownloadId: Long = -1L
-    private var pendingUpdateFileName: String? = null
-    private var pendingUpdateTargetVersion: String? = null
-    private var updateReceiverRegistered = false
-    private val updateDownloadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
-            val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-            if (downloadId == -1L || downloadId != pendingUpdateDownloadId) return
-            pendingUpdateDownloadId = -1L
-            handleUpdateDownloadComplete(downloadId)
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        registerReceiver(updateDownloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        updateReceiverRegistered = true
-    }
 
     @Composable
     override fun Content() {
@@ -463,13 +404,9 @@ class MainActivity : BaseActivity() {
         val imsRegistrationStatusMap = remember { mutableStateMapOf<Int, Boolean?>() }
         val imsRegistrationLoadingMap = remember { mutableStateMapOf<Int, Boolean>() }
         var applyingConfiguration by remember { mutableStateOf(false) }
-        var checkingUpdate by remember { mutableStateOf(false) }
-        var hasUpdateAvailable by remember { mutableStateOf(false) }
-        var latestAvailableVersion by remember { mutableStateOf<String?>(null) }
         var fixingCaptivePortal by remember { mutableStateOf(false) }
         var checkingCaptivePortalStatus by remember { mutableStateOf(false) }
         var captivePortalFixState by remember { mutableStateOf<MainViewModel.CaptivePortalFixState?>(null) }
-        var updateDialogState by remember { mutableStateOf<UpdateDialogState?>(null) }
         var showDiagnosticsDialog by remember { mutableStateOf(false) }
         var diagnosticsRunning by remember { mutableStateOf(false) }
         var diagnosticsJob by remember { mutableStateOf<Job?>(null) }
@@ -518,16 +455,6 @@ class MainActivity : BaseActivity() {
                 checkingCaptivePortalStatus = false
                 captivePortalFixState = null
             }
-        }
-        LaunchedEffect(Unit) {
-            if (checkingUpdate) return@LaunchedEffect
-            checkingUpdate = true
-            val currentVersion = BuildConfig.VERSION_NAME
-            val result = fetchLatestReleaseInfo()
-            checkingUpdate = false
-            val release = result.getOrNull()
-            hasUpdateAvailable = release != null && isVersionNewer(release.version, currentVersion)
-            latestAvailableVersion = if (hasUpdateAvailable) release?.version else null
         }
         LaunchedEffect(Unit) {
             configBackups = viewModel.loadConfigBackups()
@@ -863,8 +790,6 @@ class MainActivity : BaseActivity() {
                         onRequestShizukuPermission = {
                             viewModel.requestShizukuPermission(0)
                         },
-                        hasUpdateAvailable = hasUpdateAvailable,
-                        latestAvailableVersion = latestAvailableVersion,
                         onLogcatClick = {
                             startActivity(
                                 Intent(
@@ -872,43 +797,6 @@ class MainActivity : BaseActivity() {
                                     LogcatActivity::class.java
                                 )
                             )
-                        },
-                        checkingUpdate = checkingUpdate,
-                        onCheckUpdate = {
-                            if (checkingUpdate) return@SystemInfoCard
-                            scope.launch {
-                                checkingUpdate = true
-                                Toast.makeText(context, R.string.update_checking, Toast.LENGTH_SHORT).show()
-                                val currentVersion = BuildConfig.VERSION_NAME
-                                val result = fetchLatestReleaseInfo()
-                                checkingUpdate = false
-                                val release = result.getOrNull()
-                                if (release == null) {
-                                    hasUpdateAvailable = false
-                                    latestAvailableVersion = null
-                                    Toast.makeText(
-                                        context,
-                                        this@MainActivity.getString(
-                                            R.string.update_check_failed,
-                                            result.exceptionOrNull()?.message ?: "unknown error"
-                                        ),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                    return@launch
-                                }
-                                if (!isVersionNewer(release.version, currentVersion)) {
-                                    hasUpdateAvailable = false
-                                    latestAvailableVersion = null
-                                    Toast.makeText(context, R.string.update_latest, Toast.LENGTH_SHORT).show()
-                                    return@launch
-                                }
-                                hasUpdateAvailable = true
-                                latestAvailableVersion = release.version
-                                updateDialogState = UpdateDialogState(
-                                    currentVersion = currentVersion,
-                                    latest = release
-                                )
-                            }
                         },
                         onIssueClick = submitIssueAction,
                     )
@@ -1357,39 +1245,6 @@ class MainActivity : BaseActivity() {
                         showShizukuUpdateDialog = false
                     }
                 }
-                if (updateDialogState != null) {
-                    val state = updateDialogState!!
-                    AlertDialog(
-                        onDismissRequest = { updateDialogState = null },
-                        title = {
-                            Text(stringResource(R.string.update_found_title, state.latest.version))
-                        },
-                        text = {
-                            Text(
-                                text = stringResource(
-                                    R.string.update_found_message,
-                                    state.currentVersion,
-                                    state.latest.version
-                                )
-                            )
-                        },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    updateDialogState = null
-                                    startUpdateDownload(state.latest)
-                                }
-                            ) {
-                                Text(stringResource(R.string.update_download_install))
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { updateDialogState = null }) {
-                                Text(stringResource(id = android.R.string.cancel))
-                            }
-                        }
-                    )
-                }
                 if (showDiagnosticsDialog) {
                     AlertDialog(
                         modifier = Modifier.fillMaxWidth(0.96f),
@@ -1471,176 +1326,9 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    private fun startUpdateDownload(release: ReleaseInfo) {
-        val manager = getSystemService(DownloadManager::class.java)
-        if (manager == null) {
-            Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-            return
-        }
-        val fileName = buildUpdateApkFileName(release.version)
-        val request = DownloadManager.Request(release.downloadUrl.toUri())
-            .setTitle("Carrier IMS ${release.version}")
-            .setDescription(release.releaseNotes.ifBlank { release.version })
-            .setMimeType(UPDATE_APK_MIME_TYPE)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
-        runCatching {
-            pendingUpdateDownloadId = manager.enqueue(request)
-            pendingUpdateFileName = fileName
-            pendingUpdateTargetVersion = release.version
-        }.onSuccess {
-            Toast.makeText(this, R.string.update_download_started, Toast.LENGTH_SHORT).show()
-        }.onFailure {
-            pendingUpdateTargetVersion = null
-            Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun handleUpdateDownloadComplete(downloadId: Long) {
-        val manager = getSystemService(DownloadManager::class.java)
-        if (manager == null) {
-            Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-            return
-        }
-        val query = DownloadManager.Query().setFilterById(downloadId)
-        val cursor = manager.query(query) ?: run {
-            Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-            return
-        }
-        cursor.use {
-            if (!it.moveToFirst()) {
-                Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-                return
-            }
-            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            when (status) {
-                DownloadManager.STATUS_SUCCESSFUL -> {
-                    Toast.makeText(this, R.string.update_download_complete, Toast.LENGTH_SHORT).show()
-                    installDownloadedApk(downloadId)
-                }
-
-                else -> {
-                    val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                    Toast.makeText(
-                        this,
-                        getString(R.string.update_download_error_reason, reason.toString()),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-    }
-
-    private fun installDownloadedApk(downloadId: Long) {
-        if (!packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(this, R.string.update_install_permission_required, Toast.LENGTH_LONG).show()
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    (UNKNOWN_INSTALLER_SOURCE_SETTINGS_SCHEME + packageName).toUri()
-                )
-            )
-            return
-        }
-
-        val manager = getSystemService(DownloadManager::class.java)
-        var uri = manager?.getUriForDownloadedFile(downloadId)
-        if (uri == null) {
-            val fileName = pendingUpdateFileName ?: return
-            val apkFile = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
-            if (!apkFile.exists()) {
-                Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-                return
-            }
-            uri = FileProvider.getUriForFile(this, "$packageName.logcat_fileprovider", apkFile)
-        }
-
-        val installIntent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, UPDATE_APK_MIME_TYPE)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val apkFileName = pendingUpdateFileName
-        if (!apkFileName.isNullOrBlank()) {
-            UpdateApkCleanup.markPendingInstall(
-                context = this,
-                apkFileName = apkFileName,
-                fromVersion = BuildConfig.VERSION_NAME,
-                targetVersion = pendingUpdateTargetVersion
-            )
-        }
-        runCatching { startActivity(installIntent) }.onFailure {
-            Toast.makeText(this, R.string.update_download_failed, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private suspend fun fetchLatestReleaseInfo(): Result<ReleaseInfo> {
-        return withContext(Dispatchers.IO) {
-            val attempts = mutableListOf<String>()
-            for (apiUrl in RELEASES_LATEST_API_URLS) {
-                val release = runCatching { fetchLatestReleaseInfo(apiUrl) }.getOrNull()
-                if (release != null) {
-                    return@withContext Result.success(release)
-                }
-                attempts += apiUrl
-            }
-            Result.failure(IllegalStateException("release fetch failed: ${attempts.joinToString()}"))
-        }
-    }
-
-    private fun fetchLatestReleaseInfo(apiUrl: String): ReleaseInfo {
-        val connection = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 10_000
-            requestMethod = "GET"
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "$REPO_NAME-UpdateChecker")
-        }
-        try {
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("HTTP $responseCode")
-            }
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
-            val json = JSONObject(body)
-            val tagName = json.optString("tag_name").ifBlank {
-                json.optString("name")
-            }
-            val releaseNotes = json.optString("body", "")
-            val assets = json.optJSONArray("assets")
-            var apkUrl: String? = null
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(i) ?: continue
-                    val url = asset.optString("browser_download_url")
-                    if (url.endsWith(".apk", ignoreCase = true)) {
-                        apkUrl = url
-                        break
-                    }
-                }
-            }
-            if (tagName.isBlank()) {
-                throw IllegalStateException("invalid release tag")
-            }
-            if (apkUrl.isNullOrBlank()) {
-                throw IllegalStateException(getString(R.string.update_no_apk))
-            }
-            return ReleaseInfo(tagName, apkUrl, releaseNotes)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
     override fun onResume() {
         super.onResume()
         viewModel.updateShizukuStatus()
-    }
-
-    override fun onDestroy() {
-        if (updateReceiverRegistered) {
-            unregisterReceiver(updateDownloadReceiver)
-            updateReceiverRegistered = false
-        }
-        super.onDestroy()
     }
 }
 
@@ -2199,10 +1887,6 @@ fun SystemInfoCard(
     shizukuStatus: ShizukuStatus,
     onRefresh: () -> Unit,
     onRequestShizukuPermission: () -> Unit,
-    checkingUpdate: Boolean,
-    hasUpdateAvailable: Boolean,
-    latestAvailableVersion: String?,
-    onCheckUpdate: () -> Unit,
     onLogcatClick: () -> Unit,
     onIssueClick: () -> Unit,
 ) {
@@ -2250,50 +1934,16 @@ fun SystemInfoCard(
                         onClick = onIssueClick,
                     )
                     HeaderActionChip(
-                        icon = painterResource(
-                            if (hasUpdateAvailable) {
-                                R.drawable.ic_update_available
-                            } else {
-                                R.drawable.ic_update
-                            }
-                        ),
-                        label = stringResource(
-                            if (hasUpdateAvailable) {
-                                R.string.action_update_available
-                            } else {
-                                R.string.action_update
-                            }
-                        ),
-                        enabled = !checkingUpdate,
-                        onClick = onCheckUpdate,
-                    )
-                    HeaderActionChip(
                         icon = painterResource(R.drawable.ic_log),
                         label = stringResource(R.string.action_logcat),
                         onClick = onLogcatClick,
                     )
                 }
             }
-            val versionAnnotated = buildAnnotatedString {
-                append(stringResource(R.string.current_version, toDisplayVersion(systemInfo.appVersionName)))
-                if (hasUpdateAvailable && !latestAvailableVersion.isNullOrBlank()) {
-                    append(" · ")
-                    withStyle(
-                        SpanStyle(
-                            color = Color(0xFF16A34A),
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    ) {
-                        append(
-                            stringResource(
-                                R.string.update_available_inline,
-                                toDisplayVersion(latestAvailableVersion)
-                            )
-                        )
-                    }
-                }
-            }
-            Text(text = versionAnnotated, fontSize = 14.sp)
+            Text(
+                text = stringResource(R.string.current_version, toDisplayVersion(systemInfo.appVersionName)),
+                fontSize = 14.sp,
+            )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 stringResource(R.string.device_model, systemInfo.deviceModel),
@@ -2834,59 +2484,6 @@ private fun FeatureActionChip(
             )
         }
     )
-}
-
-private fun buildUpdateApkFileName(version: String): String {
-    val sanitized = version.replace(Regex("[^0-9A-Za-z._-]"), "_")
-    return "CarrierIMSForPixel-$sanitized.apk"
-}
-
-private data class ParsedVersion(
-    val baseParts: List<Int>,
-    val revisionCode: Int,
-    val channelRank: Int,
-)
-
-private fun parseVersion(version: String): ParsedVersion? {
-    val normalized = version.trim().removePrefix("v").removePrefix("V")
-    val baseMatch = Regex("\\d+(?:\\.\\d+){1,2}").find(normalized) ?: return null
-    val baseParts = baseMatch.value.split('.').map { it.toIntOrNull() ?: 0 }
-    val suffix = normalized.substring(baseMatch.range.last + 1)
-    val channelMatch = Regex("(?:^|[._-])([rRdD])(\\d+)").find(suffix)
-    val channel = channelMatch?.groupValues?.getOrNull(1)?.lowercase(Locale.US)
-    val revisionCode = channelMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
-    val channelRank = when (channel) {
-        "r" -> 2
-        "d" -> 1
-        else -> 0
-    }
-    return ParsedVersion(baseParts, revisionCode, channelRank)
-}
-
-private fun compareVersionParts(left: List<Int>, right: List<Int>): Int {
-    val maxSize = maxOf(left.size, right.size)
-    for (index in 0 until maxSize) {
-        val l = left.getOrElse(index) { 0 }
-        val r = right.getOrElse(index) { 0 }
-        if (l != r) return l.compareTo(r)
-    }
-    return 0
-}
-
-private fun isVersionNewer(latest: String, current: String): Boolean {
-    val latestVersion = parseVersion(latest)
-    val currentVersion = parseVersion(current)
-    if (latestVersion == null || currentVersion == null) {
-        return latest.trim() != current.trim()
-    }
-    val baseCompare = compareVersionParts(latestVersion.baseParts, currentVersion.baseParts)
-    if (baseCompare != 0) {
-        return baseCompare > 0
-    }
-    if (latestVersion.revisionCode != currentVersion.revisionCode) {
-        return latestVersion.revisionCode > currentVersion.revisionCode
-    }
-    return latestVersion.channelRank > currentVersion.channelRank
 }
 
 private fun normalizeCountryIso(value: String): String {

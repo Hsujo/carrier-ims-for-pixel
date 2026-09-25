@@ -14,7 +14,6 @@
     <string name="app_version">App Version: %s</string>
     <string name="current_version">Current: %s</string>
     <string name="current_version_with_update">Current: %1$s · Update: %2$s</string>
-    <string name="update_available_inline">Update: %s</string>
     <string name="device_model">Device Model: %s</string>
     <string name="android_version">Android Version: %s</string>
     <string name="system_build_version">System Build Version: %s</string>
@@ -87,8 +86,6 @@
     <string name="action_repo">Repo</string>
     <string name="action_issue">Issue</string>
     <string name="action_logcat">Logs</string>
-    <string name="action_update">Update</string>
-    <string name="action_update_available">New</string>
     <string name="captive_portal_fix_title">Network Verification Fix</string>
     <string name="captive_portal_fix_action">One-tap Network Fix</string>
     <string name="captive_portal_fix_restore_action">Restore Default</string>
@@ -233,19 +230,6 @@
     <string name="select_single_sim">Please select a single SIM</string>
     <string name="update_shizuku">Please update Shizuku to the latest version</string>
     <string name="sim_list_refresh">SIM list refreshed</string>
-    <string name="update_checking">Checking for updates…</string>
-    <string name="update_latest">You already have the latest version</string>
-    <string name="update_no_apk">No downloadable APK found</string>
-    <string name="update_check_failed">Failed to check updates: %s</string>
-    <string name="update_found_title">New version found: %s</string>
-    <string name="update_found_message">Current: %1$s\nLatest: %2$s\nDownload and install now?</string>
-    <string name="update_download_install">Download and Install</string>
-    <string name="update_download_started">Update download started</string>
-    <string name="update_download_failed">Failed to start update download</string>
-    <string name="update_download_complete">Download complete, opening installer</string>
-    <string name="update_download_error_reason">Download failed: %s</string>
-    <string name="update_install_permission_required">Please allow installing unknown apps first</string>
-    <string name="update_open_settings">Open Settings</string>
 
     <!-- Dump -->
     <string name="dump_title">CarrierConfig Dump</string>
