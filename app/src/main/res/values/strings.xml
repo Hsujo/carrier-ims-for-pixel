@@ -13,7 +13,6 @@
     <string name="system_info">System Info</string>
     <string name="app_version">App Version: %s</string>
     <string name="current_version">Current: %s</string>
-    <string name="current_version_with_update">Current: %1$s · Update: %2$s</string>
     <string name="device_model">Device Model: %s</string>
     <string name="android_version">Android Version: %s</string>
     <string name="system_build_version">System Build Version: %s</string>
