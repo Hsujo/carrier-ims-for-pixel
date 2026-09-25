@@ -24,18 +24,29 @@ class LogcatViewModel(application: Application) : AndroidViewModel(application) 
         LogcatRepository.clearLogs()
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        // 离开日志页即停止抓取；再次进入时 logcat 会先输出 logd 缓冲区，已有日志不会丢失
+        LogcatRepository.stopAndClear()
+    }
+
     fun exportLogFile() {
+        // 在主线程取快照，避免 IO 线程遍历时与新日志写入冲突
+        val rawLines = logs.map { it.raw }
         viewModelScope.launch(Dispatchers.IO) {
             File(application.externalCacheDir, "turbo_ims.log").apply {
-                writeText("App Version: ${BuildConfig.VERSION_NAME}\n")
-                appendText("Device: ${Build.MANUFACTURER} ${Build.MODEL}\n")
-                appendText("Android Version: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n")
-                appendText("System Build Version: ${Build.DISPLAY}\n")
-                appendText("Security Patch Version: ${Build.VERSION.SECURITY_PATCH}\n")
-                appendText("-----------------------------------------------------------------")
-                appendText("TurboIms Logcat:\n")
-                logs.map { it.raw }.forEach {
-                    appendText(it + "\n")
+                bufferedWriter().use { writer ->
+                    writer.write("App Version: ${BuildConfig.VERSION_NAME}\n")
+                    writer.write("Device: ${Build.MANUFACTURER} ${Build.MODEL}\n")
+                    writer.write("Android Version: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n")
+                    writer.write("System Build Version: ${Build.DISPLAY}\n")
+                    writer.write("Security Patch Version: ${Build.VERSION.SECURITY_PATCH}\n")
+                    writer.write("-----------------------------------------------------------------")
+                    writer.write("TurboIms Logcat:\n")
+                    rawLines.forEach {
+                        writer.write(it)
+                        writer.write("\n")
+                    }
                 }
 
                 val authority = "${application.packageName}.logcat_fileprovider"

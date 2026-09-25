@@ -67,6 +67,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -364,7 +365,7 @@ class MainActivity : BaseActivity() {
         val clipboardManager = context.getSystemService(ClipboardManager::class.java)
 
         val scope = rememberCoroutineScope()
-        var selectedTab by remember { mutableStateOf(MainTab.IMS) }
+        var selectedTab by rememberSaveable { mutableStateOf(MainTab.IMS) }
         var selectedSim by remember { mutableStateOf<SimSelection?>(null) }
         var showShizukuUpdateDialog by remember { mutableStateOf(false) }
         var pendingAutoSelectSimAfterReady by remember { mutableStateOf(false) }
@@ -372,18 +373,16 @@ class MainActivity : BaseActivity() {
         val imsRegistrationLoadingMap = remember { mutableStateMapOf<Int, Boolean>() }
         var applyingConfiguration by remember { mutableStateOf(false) }
         var fixingCaptivePortal by remember { mutableStateOf(false) }
-        var checkingCaptivePortalStatus by remember { mutableStateOf(false) }
-        var captivePortalFixState by remember { mutableStateOf<MainViewModel.CaptivePortalFixState?>(null) }
+        val checkingCaptivePortalStatus by viewModel.checkingCaptivePortalStatus.collectAsStateWithLifecycle()
+        val captivePortalFixState by viewModel.captivePortalFixState.collectAsStateWithLifecycle()
         var showDiagnosticsDialog by remember { mutableStateOf(false) }
         var diagnosticsRunning by remember { mutableStateOf(false) }
         var diagnosticsJob by remember { mutableStateOf<Job?>(null) }
-        var networkExitChecking by remember { mutableStateOf(false) }
-        var networkExitStatus by remember { mutableStateOf<NetworkExitStatus?>(null) }
-        var networkExitError by remember { mutableStateOf<String?>(null) }
+        val networkExitState by viewModel.networkExitState.collectAsStateWithLifecycle()
         var apnDraft by remember { mutableStateOf<ApnDraftConfig?>(null) }
         var apnDraftSim by remember { mutableStateOf<SimSelection?>(null) }
         var applyingApn by remember { mutableStateOf(false) }
-        var configBackups by remember { mutableStateOf<List<ConfigBackupSnapshot>>(emptyList()) }
+        val configBackups by viewModel.configBackups.collectAsStateWithLifecycle()
         var pendingBackupRestore by remember { mutableStateOf<ConfigBackupSnapshot?>(null) }
         var pendingBackupRestoreSim by remember { mutableStateOf<SimSelection?>(null) }
         val diagnosticsLines = remember { mutableStateListOf<String>() }
@@ -411,17 +410,6 @@ class MainActivity : BaseActivity() {
                 showShizukuUpdateDialog = true
             }
             pendingAutoSelectSimAfterReady = shizukuStatus == ShizukuStatus.READY
-            if (shizukuStatus == ShizukuStatus.READY) {
-                checkingCaptivePortalStatus = true
-                captivePortalFixState = viewModel.queryCaptivePortalFixState()
-                checkingCaptivePortalStatus = false
-            } else {
-                checkingCaptivePortalStatus = false
-                captivePortalFixState = null
-            }
-        }
-        LaunchedEffect(Unit) {
-            configBackups = viewModel.loadConfigBackups()
         }
         LaunchedEffect(allSimList) {
             val validSubIds = allSimList.filter { it.subId >= 0 }.map { it.subId }.toSet()
@@ -603,9 +591,7 @@ class MainActivity : BaseActivity() {
                         Toast.LENGTH_LONG
                     ).show()
                 }
-                checkingCaptivePortalStatus = true
-                captivePortalFixState = viewModel.queryCaptivePortalFixState()
-                checkingCaptivePortalStatus = false
+                viewModel.refreshCaptivePortalFixState()
             }
         }
 
@@ -950,9 +936,9 @@ class MainActivity : BaseActivity() {
                         checkingCaptivePortalStatus = checkingCaptivePortalStatus,
                         fixingCaptivePortal = fixingCaptivePortal,
                         captivePortalFixState = captivePortalFixState,
-                        networkExitChecking = networkExitChecking,
-                        networkExitStatus = networkExitStatus,
-                        networkExitError = networkExitError,
+                        networkExitChecking = networkExitState.checking,
+                        networkExitStatus = networkExitState.status,
+                        networkExitError = networkExitState.error,
                         configBackups = configBackups,
                         onSelectSim = { selectedSim = it },
                         onRefreshSimList = refreshSimListAction,
@@ -964,17 +950,7 @@ class MainActivity : BaseActivity() {
                                 FeatureValue(enabled, FeatureValueType.BOOLEAN)
                             )
                         },
-                        onCheckNetworkExit = {
-                            if (networkExitChecking) return@ExtraToolsPage
-                            scope.launch {
-                                networkExitChecking = true
-                                networkExitError = null
-                                val result = viewModel.checkNetworkExit()
-                                networkExitStatus = result.getOrNull()
-                                networkExitError = result.exceptionOrNull()?.message
-                                networkExitChecking = false
-                            }
-                        },
+                        onCheckNetworkExit = viewModel::refreshNetworkExit,
                         onOpenApnSettings = {
                             openApnSettings(context, extraSelectedSim)
                         },
@@ -1015,13 +991,11 @@ class MainActivity : BaseActivity() {
                                 featureMap = buildCompleteFeatureMap(featureSwitches),
                                 name = sim.showTitle,
                             )
-                            configBackups = viewModel.loadConfigBackups()
                             Toast.makeText(context, R.string.config_backup_saved, Toast.LENGTH_SHORT).show()
                         },
                         onRestoreBackup = { backup -> restoreBackupAction(extraSelectedSim, backup, false) },
                         onDeleteBackup = { backup ->
                             viewModel.deleteConfigBackup(backup.id)
-                            configBackups = viewModel.loadConfigBackups()
                         },
                     )
                 }

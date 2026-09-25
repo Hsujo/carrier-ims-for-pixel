@@ -117,6 +117,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val httpsUrl: String,
     )
 
+    data class NetworkExitUiState(
+        val checking: Boolean = false,
+        val status: NetworkExitStatus? = null,
+        val error: String? = null,
+    )
+
     private var toast: Toast? = null
     private val runtimePrefs = application.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
     private val configBackupPrefs = application.getSharedPreferences(CONFIG_BACKUP_PREFS, Context.MODE_PRIVATE)
@@ -225,6 +231,20 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private val _issueFailureLogs = MutableStateFlow("")
     val issueFailureLogs: StateFlow<String> = _issueFailureLogs.asStateFlow()
 
+    // 网络验证（captive portal）状态，放在 ViewModel 中以免界面重建时重复探测
+    private val _captivePortalFixState = MutableStateFlow<CaptivePortalFixState?>(null)
+    val captivePortalFixState: StateFlow<CaptivePortalFixState?> = _captivePortalFixState.asStateFlow()
+    private val _checkingCaptivePortalStatus = MutableStateFlow(false)
+    val checkingCaptivePortalStatus: StateFlow<Boolean> = _checkingCaptivePortalStatus.asStateFlow()
+
+    // 网络出口检测结果
+    private val _networkExitState = MutableStateFlow(NetworkExitUiState())
+    val networkExitState: StateFlow<NetworkExitUiState> = _networkExitState.asStateFlow()
+
+    // 配置备份列表
+    private val _configBackups = MutableStateFlow<List<ConfigBackupSnapshot>>(emptyList())
+    val configBackups: StateFlow<List<ConfigBackupSnapshot>> = _configBackups.asStateFlow()
+
     // Shizuku Binder 接收监听器（服务连接/授权后触发）
     private val binderListener = Shizuku.OnBinderReceivedListener { updateShizukuStatus() }
     private val binderDeadListener = Shizuku.OnBinderDeadListener { updateShizukuStatus() }
@@ -235,6 +255,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         loadSimList()
         loadSystemInfo()
         refreshIssueFailureLogs()
+        refreshConfigBackups()
         updateShizukuStatus()
         Shizuku.addBinderReceivedListener(binderListener)
         Shizuku.addBinderDeadListener(binderDeadListener)
@@ -263,6 +284,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 else -> ShizukuStatus.READY
             }
             _shizukuStatus.value = status
+            if (status == ShizukuStatus.READY && previousStatus != ShizukuStatus.READY) {
+                viewModelScope.launch { refreshCaptivePortalFixState() }
+            } else if (status != ShizukuStatus.READY) {
+                _captivePortalFixState.value = null
+            }
             if (
                 status == ShizukuStatus.READY &&
                 (
@@ -579,7 +605,32 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         )
     }
 
-    suspend fun checkNetworkExit(): Result<NetworkExitStatus> = withContext(Dispatchers.IO) {
+    /**
+     * 重新查询网络验证状态并更新 [captivePortalFixState]。
+     */
+    suspend fun refreshCaptivePortalFixState() {
+        _checkingCaptivePortalStatus.value = true
+        try {
+            _captivePortalFixState.value = queryCaptivePortalFixState()
+        } finally {
+            _checkingCaptivePortalStatus.value = false
+        }
+    }
+
+    fun refreshNetworkExit() {
+        if (_networkExitState.value.checking) return
+        _networkExitState.value = _networkExitState.value.copy(checking = true, error = null)
+        viewModelScope.launch {
+            val result = checkNetworkExit()
+            _networkExitState.value = NetworkExitUiState(
+                checking = false,
+                status = result.getOrNull(),
+                error = result.exceptionOrNull()?.message,
+            )
+        }
+    }
+
+    private suspend fun checkNetworkExit(): Result<NetworkExitStatus> = withContext(Dispatchers.IO) {
         runCatching {
             // 出口 IP 查询与三项可达性探测并行执行，总耗时取决于最慢的一项而不是相加
             coroutineScope {
@@ -658,17 +709,25 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         configBackupPrefs.edit {
             putString(snapshot.id, snapshot.toJson().toString())
         }
+        refreshConfigBackups()
         return snapshot
     }
 
-    fun loadConfigBackups(): List<ConfigBackupSnapshot> {
+    private fun loadConfigBackups(): List<ConfigBackupSnapshot> {
         return configBackupPrefs.all.values
             .mapNotNull { raw -> (raw as? String)?.let { parseConfigBackup(it) } }
             .sortedByDescending { it.createdAtMillis }
     }
 
+    private fun refreshConfigBackups() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _configBackups.value = loadConfigBackups()
+        }
+    }
+
     fun deleteConfigBackup(id: String) {
         configBackupPrefs.edit { remove(id) }
+        refreshConfigBackups()
     }
 
     private suspend fun isDefaultPortalCheckReachable(): Boolean {

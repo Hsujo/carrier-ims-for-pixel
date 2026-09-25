@@ -14,6 +14,7 @@
 
         <activity
             android:name="io.github.vvb2060.ims.ui.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden|navigation|density"
             android:exported="true"
             android:theme="@style/Theme.TurbolIms">
             <intent-filter>
@@ -23,10 +24,12 @@
         </activity>
         <activity
             android:name="io.github.vvb2060.ims.ui.LogcatActivity"
-            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden|navigation|density"
+            android:exported="false"
             android:theme="@style/Theme.TurbolIms" />
         <activity
             android:name="io.github.vvb2060.ims.ui.DumpActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden|navigation|density"
             android:exported="false"
             android:theme="@style/Theme.TurbolIms" />
 
