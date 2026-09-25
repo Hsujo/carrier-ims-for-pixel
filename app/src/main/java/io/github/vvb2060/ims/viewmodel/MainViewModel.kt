@@ -38,6 +38,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
@@ -578,24 +581,31 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     suspend fun checkNetworkExit(): Result<NetworkExitStatus> = withContext(Dispatchers.IO) {
         runCatching {
-            val json = fetchJsonObject(NETWORK_EXIT_API_URL)
-            val ip = json.optString("ip")
-            val org = json.optString("org").ifBlank { json.optString("asn") }
-            val googleReachable = isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("Google"))
-            val tiktokReachable = isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("TikTok"))
-            val captiveReachable = isPortalUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("联网验证"))
-            NetworkExitStatus(
-                ip = ip.ifBlank { "N/A" },
-                ipVersion = if (ip.contains(":")) "IPv6" else "IPv4",
-                country = json.optString("country_name").ifBlank { json.optString("country") },
-                region = json.optString("region"),
-                city = json.optString("city"),
-                org = org.ifBlank { "N/A" },
-                risk = estimateIpRisk(org),
-                googleReachable = googleReachable,
-                tiktokReachable = tiktokReachable,
-                captivePortalReachable = captiveReachable,
-            )
+            // 出口 IP 查询与三项可达性探测并行执行，总耗时取决于最慢的一项而不是相加
+            coroutineScope {
+                val jsonResult = async { fetchJsonObject(NETWORK_EXIT_API_URL) }
+                val googleResult = async { isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("Google")) }
+                val tiktokResult = async { isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("TikTok")) }
+                val captiveResult = async { isPortalUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("联网验证")) }
+                val json = jsonResult.await()
+                val ip = json.optString("ip")
+                val org = json.optString("org").ifBlank { json.optString("asn") }
+                val googleReachable = googleResult.await()
+                val tiktokReachable = tiktokResult.await()
+                val captiveReachable = captiveResult.await()
+                NetworkExitStatus(
+                    ip = ip.ifBlank { "N/A" },
+                    ipVersion = if (ip.contains(":")) "IPv6" else "IPv4",
+                    country = json.optString("country_name").ifBlank { json.optString("country") },
+                    region = json.optString("region"),
+                    city = json.optString("city"),
+                    org = org.ifBlank { "N/A" },
+                    risk = estimateIpRisk(org),
+                    googleReachable = googleReachable,
+                    tiktokReachable = tiktokReachable,
+                    captivePortalReachable = captiveReachable,
+                )
+            }
         }
     }
 
@@ -662,9 +672,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     private suspend fun isDefaultPortalCheckReachable(): Boolean {
-        return withContext(Dispatchers.IO) {
-            DEFAULT_CAPTIVE_PORTAL_TEST_URLS.any { url -> isPortalUrlReachable(url) }
-        }
+        return isAnyPortalUrlReachable(DEFAULT_CAPTIVE_PORTAL_TEST_URLS)
     }
 
     private suspend fun isPortalConfigReachable(httpUrl: String, httpsUrl: String): Boolean {
@@ -673,9 +681,14 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             if (httpsUrl.isNotBlank()) add(httpsUrl)
         }
         if (targets.isEmpty()) return false
-        return withContext(Dispatchers.IO) {
-            targets.any { url -> isPortalUrlReachable(url) }
-        }
+        return isAnyPortalUrlReachable(targets)
+    }
+
+    // 多个探测地址并行请求，最坏耗时为单次超时而不是逐个累加
+    private suspend fun isAnyPortalUrlReachable(urls: List<String>): Boolean = coroutineScope {
+        urls.map { url -> async(Dispatchers.IO) { isPortalUrlReachable(url) } }
+            .awaitAll()
+            .any { it }
     }
 
     private fun isPortalUrlReachable(url: String): Boolean {
