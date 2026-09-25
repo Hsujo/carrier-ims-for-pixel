@@ -35,8 +35,6 @@ import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cached
@@ -46,13 +44,8 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,7 +54,6 @@ import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -89,9 +81,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -121,19 +111,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private const val COUNTRY_ISO_OPTION_DEFAULT = "__default__"
-private const val COUNTRY_ISO_OPTION_OTHER = "__other__"
 private const val REPO_URL = "https://github.com/Hsujo/carrier-ims-for-pixel"
 private const val REPO_ISSUE_URL = "https://github.com/Hsujo/carrier-ims-for-pixel/issues/new"
 private val VERSION_DISPLAY_WITH_REV_REGEX = Regex("""\d+\.\d+\.\d+\.[rd]\d+""")
 private val VERSION_DISPLAY_REGEX = Regex("""\d+\.\d+\.\d+""")
-
-private data class CountryIsoOption(
-    val key: String,
-    val isoCode: String?,
-    val mcc: String?,
-    val labelRes: Int,
-)
 
 private enum class CaptivePortalAction {
     FIX,
@@ -148,18 +129,6 @@ private enum class MainTab(
     EXTRA(R.string.tab_extra),
     ABOUT(R.string.tab_about),
 }
-
-private val countryIsoOptions = listOf(
-    CountryIsoOption("cn", "cn", "460", R.string.country_iso_option_china_mainland),
-    CountryIsoOption("hk", "hk", "454", R.string.country_iso_option_hong_kong),
-    CountryIsoOption("tw", "tw", "466", R.string.country_iso_option_taiwan),
-    CountryIsoOption("us", "us", "310-316", R.string.country_iso_option_us),
-    CountryIsoOption("jp", "jp", "440-441", R.string.country_iso_option_japan),
-    CountryIsoOption("gb", "gb", "234-235", R.string.country_iso_option_uk),
-    CountryIsoOption("kr", "kr", "450", R.string.country_iso_option_korea),
-    CountryIsoOption("sg", "sg", "525", R.string.country_iso_option_singapore),
-    CountryIsoOption(COUNTRY_ISO_OPTION_OTHER, null, null, R.string.country_iso_option_other),
-)
 
 private val fiveGFeatureSet = setOf(
     Feature.FIVE_G_NR,
@@ -334,7 +303,6 @@ private fun dumpValueText(value: Any?): String {
 private fun buildEditableConfigSnapshotText(
     selectedSim: SimSelection,
     featureMap: Map<Feature, FeatureValue>,
-    countryMccInput: String,
     resolvedCountryIsoForApply: String?,
     bundleForApply: Bundle,
     captivePortalState: MainViewModel.CaptivePortalFixState?,
@@ -355,7 +323,6 @@ private fun buildEditableConfigSnapshotText(
             val value = featureMap[feature]?.data ?: feature.defaultValue
             appendLine("feature.${feature.name.lowercase(Locale.US)}=${dumpValueText(value)}")
         }
-        appendLine("input.country_mcc=$countryMccInput")
         appendLine("apply.country_iso_resolved=${resolvedCountryIsoForApply ?: ""}")
         appendLine()
 
@@ -422,9 +389,6 @@ class MainActivity : BaseActivity() {
         val diagnosticsLines = remember { mutableStateListOf<String>() }
         val featureSwitches = remember { mutableStateMapOf<Feature, FeatureValue>() }
         val committedFeatureSwitches = remember { mutableStateMapOf<Feature, FeatureValue>() }
-        val countryMccDraftBySubId = remember { mutableStateMapOf<Int, String>() }
-        val committedCountryMccBySubId = remember { mutableStateMapOf<Int, String>() }
-        val countryIsoApplySignalBySubId = remember { mutableStateMapOf<Int, Int>() }
         val submitIssueAction: () -> Unit = {
             val issueBody = buildIssueBody(
                 context = context,
@@ -467,15 +431,6 @@ class MainActivity : BaseActivity() {
             imsRegistrationLoadingMap.keys.toList()
                 .filterNot { validSubIds.contains(it) }
                 .forEach { imsRegistrationLoadingMap.remove(it) }
-            countryMccDraftBySubId.keys.toList()
-                .filterNot { validSubIds.contains(it) }
-                .forEach { countryMccDraftBySubId.remove(it) }
-            committedCountryMccBySubId.keys.toList()
-                .filterNot { validSubIds.contains(it) }
-                .forEach { committedCountryMccBySubId.remove(it) }
-            countryIsoApplySignalBySubId.keys.toList()
-                .filterNot { validSubIds.contains(it) }
-                .forEach { countryIsoApplySignalBySubId.remove(it) }
             val currentSelected = selectedSim
             if (currentSelected == null) {
                 selectedSim = allSimList.firstOrNull()
@@ -515,11 +470,6 @@ class MainActivity : BaseActivity() {
                 }
             }
             syncFeatureState(featureSwitches, committedFeatureSwitches)
-            if (currentSelected.subId >= 0) {
-                val savedMcc = viewModel.loadSavedCountryMccOverride(currentSelected.subId)
-                countryMccDraftBySubId[currentSelected.subId] = savedMcc
-                committedCountryMccBySubId[currentSelected.subId] = savedMcc
-            }
             if (currentSelected.subId >= 0) {
                 imsRegistrationStatusMap[currentSelected.subId] =
                     if (shizukuStatus == ShizukuStatus.READY) {
@@ -574,9 +524,6 @@ class MainActivity : BaseActivity() {
                             val resultMsg = viewModel.onApplyConfiguration(
                                 sim,
                                 buildCompleteFeatureMap(committedFeatureSwitches),
-                                countryMccOverride = sim.subId
-                                    .takeIf { it >= 0 }
-                                    ?.let { countryMccDraftBySubId[it].orEmpty() }
                             )
                             if (resultMsg != null) {
                                 if ((value.data as? Boolean) == true) {
@@ -688,15 +635,10 @@ class MainActivity : BaseActivity() {
                     val resultMsg = viewModel.onApplyConfiguration(
                         sim,
                         buildCompleteFeatureMap(backup.featureValues),
-                        countryMccOverride = backup.countryMccOverride,
                     )
                     if (resultMsg == null) {
                         syncFeatureState(committedFeatureSwitches, backup.featureValues)
                         syncFeatureState(featureSwitches, backup.featureValues)
-                        countryMccDraftBySubId[sim.subId] = backup.countryMccOverride
-                        committedCountryMccBySubId[sim.subId] = backup.countryMccOverride
-                        countryIsoApplySignalBySubId[sim.subId] =
-                            (countryIsoApplySignalBySubId[sim.subId] ?: 0) + 1
                         Toast.makeText(context, R.string.config_backup_restored, Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(
@@ -849,7 +791,6 @@ class MainActivity : BaseActivity() {
                                         val applyResultMsg = viewModel.onApplyConfiguration(
                                             sim,
                                             buildCompleteFeatureMap(committedFeatureSwitches),
-                                            countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
                                         )
                                     if (applyResultMsg != null) {
                                         viewModel.appendSwitchFailureLog(
@@ -886,62 +827,10 @@ class MainActivity : BaseActivity() {
                             }
                         },
                         featureSwitches,
-                        countryIsoApplySignal = selectedSim?.subId
-                            ?.takeIf { it >= 0 }
-                            ?.let { countryIsoApplySignalBySubId[it] ?: 0 }
-                            ?: 0,
-                        countryMccDraft = selectedSim?.subId
-                            ?.takeIf { it >= 0 }
-                            ?.let { countryMccDraftBySubId[it].orEmpty() }
-                            .orEmpty(),
-                        onCountryMccDraftChange = { newMcc ->
-                            selectedSim?.subId
-                                ?.takeIf { it >= 0 }
-                                ?.let { countryMccDraftBySubId[it] = newMcc }
-                        },
                         onFeatureSwitchChange = { feature, value ->
                             handleFeatureSwitchChange(selectedSim, feature, value)
                         },
                         showTikTokFix = false,
-                        onTextFeatureCommit = { _ ->
-                            scope.launch {
-                                if (applyingConfiguration) return@launch
-                                val sim = selectedSim
-                                if (sim == null || sim.subId < 0) {
-                                    Toast.makeText(context, R.string.select_single_sim, Toast.LENGTH_SHORT).show()
-                                    return@launch
-                                }
-                                if (shizukuStatus != ShizukuStatus.READY) {
-                                    Toast.makeText(context, R.string.shizuku_not_running_msg, Toast.LENGTH_LONG).show()
-                                    return@launch
-                                }
-                                val mapToApply = buildCompleteFeatureMap(featureSwitches)
-                                if (mapToApply == buildCompleteFeatureMap(committedFeatureSwitches)) {
-                                    return@launch
-                                }
-                                applyingConfiguration = true
-                                try {
-                                        val resultMsg = viewModel.onApplyConfiguration(
-                                            sim,
-                                            mapToApply,
-                                            countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty()
-                                        )
-                                    if (resultMsg == null) {
-                                        syncFeatureState(committedFeatureSwitches, mapToApply)
-                                        countryIsoApplySignalBySubId[sim.subId] =
-                                            (countryIsoApplySignalBySubId[sim.subId] ?: 0) + 1
-                                    } else {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.config_failed, resultMsg),
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                } finally {
-                                    applyingConfiguration = false
-                                }
-                            }
-                        },
                         resetFeatures = {
                             val sim = selectedSim
                             if (sim == null || sim.subId < 0) {
@@ -964,21 +853,11 @@ class MainActivity : BaseActivity() {
                                     if (currentConfig != null) {
                                         syncFeatureState(committedFeatureSwitches, currentConfig)
                                         syncFeatureState(featureSwitches, committedFeatureSwitches)
-                                        countryMccDraftBySubId[sim.subId] = viewModel
-                                            .loadSavedCountryMccOverride(sim.subId)
-                                        committedCountryMccBySubId[sim.subId] =
-                                            countryMccDraftBySubId[sim.subId].orEmpty()
-                                        countryIsoApplySignalBySubId[sim.subId] =
-                                            (countryIsoApplySignalBySubId[sim.subId] ?: 0) + 1
                                         imsRegistrationStatusMap[sim.subId] =
                                             viewModel.readImsRegistrationStatus(sim.subId)
                                     } else {
                                         syncFeatureState(committedFeatureSwitches, viewModel.loadDefaultPreferences())
                                         syncFeatureState(featureSwitches, committedFeatureSwitches)
-                                        countryMccDraftBySubId[sim.subId] = ""
-                                        committedCountryMccBySubId[sim.subId] = ""
-                                        countryIsoApplySignalBySubId[sim.subId] =
-                                            (countryIsoApplySignalBySubId[sim.subId] ?: 0) + 1
                                     }
                                 } finally {
                                     applyingConfiguration = false
@@ -997,8 +876,6 @@ class MainActivity : BaseActivity() {
                                 val bundleForApply = ImsModifier.buildBundle(
                                     carrierName = null,
                                     countryISO = resolvedCountryIso,
-                                    countryMcc = null,
-                                    countryMncHint = sim.mnc,
                                     enableVoLTE = (mapToDump[Feature.VOLTE]?.data ?: true) as Boolean,
                                     enableVoWiFi = (mapToDump[Feature.VOWIFI]?.data ?: true) as Boolean,
                                     enableVT = (mapToDump[Feature.VT]?.data ?: true) as Boolean,
@@ -1013,7 +890,6 @@ class MainActivity : BaseActivity() {
                                 val snapshotText = buildEditableConfigSnapshotText(
                                     selectedSim = sim,
                                     featureMap = mapToDump,
-                                    countryMccInput = countryMccDraftBySubId[sim.subId].orEmpty(),
                                     resolvedCountryIsoForApply = resolvedCountryIso,
                                     bundleForApply = bundleForApply,
                                     captivePortalState = captivePortalFixState ?: viewModel.queryCaptivePortalFixState(),
@@ -1142,7 +1018,6 @@ class MainActivity : BaseActivity() {
                                 selectedSim = sim,
                                 featureMap = buildCompleteFeatureMap(featureSwitches),
                                 name = sim.showTitle,
-                                countryMccOverride = countryMccDraftBySubId[sim.subId].orEmpty(),
                             )
                             configBackups = viewModel.loadConfigBackups()
                             Toast.makeText(context, R.string.config_backup_saved, Toast.LENGTH_SHORT).show()
@@ -2206,11 +2081,7 @@ fun FeaturesCard(
     featureSwitchesEnabled: Boolean = true,
     onImsRegistrationToggle: (Int, Boolean) -> Unit,
     featureSwitches: Map<Feature, FeatureValue>,
-    countryIsoApplySignal: Int,
-    countryMccDraft: String,
-    onCountryMccDraftChange: (String) -> Unit,
     onFeatureSwitchChange: (Feature, FeatureValue) -> Unit,
-    onTextFeatureCommit: (Feature) -> Unit,
     resetFeatures: () -> Unit,
     onDumpConfig: () -> Unit,
     onRunDiagnostics: () -> Unit,
@@ -2385,75 +2256,18 @@ fun FeaturesCard(
             orderedFeatures.forEachIndexed { index, feature ->
                 val title = stringResource(feature.showTitleRes)
                 val description = stringResource(feature.showDescriptionRes)
-                when (feature.valueType) {
-                    FeatureValueType.STRING -> {
-                        val inputValue = (featureSwitches[feature]?.data ?: "") as String
-                        if (feature == Feature.COUNTRY_ISO) {
-                            CountryIsoFeatureItem(
-                                title = title,
-                                description = description,
-                                initInput = inputValue,
-                                initMcc = countryMccDraft,
-                                currentNetworkIso = selectedSim?.countryIso.orEmpty(),
-                                currentNetworkMcc = selectedSim?.mcc.orEmpty(),
-                                currentNetworkMnc = selectedSim?.mnc.orEmpty(),
-                                selectedSubId = selectedSim?.subId ?: -1,
-                                applySuccessSignal = countryIsoApplySignal,
-                                onInputChange = { iso, mcc ->
-                                    onFeatureSwitchChange(
-                                        feature,
-                                        FeatureValue(iso, feature.valueType)
-                                    )
-                                    onCountryMccDraftChange(mcc)
-                                },
-                                onCommitRequest = { onTextFeatureCommit(feature) },
-                            )
-                        } else if (feature == Feature.CARRIER_NAME) {
-                            val currentCarrierName = selectedSim?.carrierName?.trim().orEmpty()
-                            val displayCarrierName = if (inputValue.isBlank()) currentCarrierName else inputValue
-                            StringFeatureItem(
-                                title = title,
-                                description = description,
-                                initInput = displayCarrierName,
-                                onInputChange = {
-                                    onFeatureSwitchChange(
-                                        feature,
-                                        FeatureValue(it, feature.valueType)
-                                    )
-                                },
-                                onCommitInput = { onTextFeatureCommit(feature) },
-                            )
-                        } else {
-                            StringFeatureItem(
-                                title = title,
-                                description = description,
-                                initInput = inputValue,
-                                onInputChange = {
-                                    onFeatureSwitchChange(
-                                        feature,
-                                        FeatureValue(it, feature.valueType)
-                                    )
-                                },
-                                onCommitInput = { onTextFeatureCommit(feature) },
-                            )
-                        }
-                    }
-
-                    FeatureValueType.BOOLEAN -> {
-                        BooleanFeatureItem(
-                            title = title,
-                            description = description,
-                            checked = (featureSwitches[feature]?.data ?: feature.defaultValue) as Boolean,
-                            enabled = featureSwitchesEnabled,
-                            onCheckedChange = {
-                                onFeatureSwitchChange(
-                                    feature,
-                                    FeatureValue(it, feature.valueType)
-                                )
-                            }
+                BooleanFeatureItem(
+                    title = title,
+                    description = description,
+                    checked = (featureSwitches[feature]?.data ?: feature.defaultValue) as Boolean,
+                    enabled = featureSwitchesEnabled,
+                    onCheckedChange = {
+                        onFeatureSwitchChange(
+                            feature,
+                            FeatureValue(it, feature.valueType)
                         )
                     }
-                }
+                )
                 if (index < orderedFeatures.lastIndex) {
                     HorizontalDivider(thickness = 0.5.dp)
                 }
@@ -2484,415 +2298,6 @@ private fun FeatureActionChip(
             )
         }
     )
-}
-
-private fun normalizeCountryIso(value: String): String {
-    return value.trim().lowercase(Locale.US)
-}
-
-private fun sanitizeCountryIsoInput(value: String): String {
-    return normalizeCountryIso(value)
-        .filter { it.isLetterOrDigit() }
-        .take(8)
-}
-
-private fun sanitizeMccInput(value: String): String {
-    val cleaned = value.trim().filter { it.isDigit() || it == '-' }
-    if (cleaned.isEmpty()) return ""
-    val firstDash = cleaned.indexOf('-')
-    return if (firstDash == -1) {
-        cleaned.take(7)
-    } else {
-        val left = cleaned.substring(0, firstDash).filter { it.isDigit() }.take(3)
-        val right = cleaned.substring(firstDash + 1).filter { it.isDigit() }.take(3)
-        if (right.isNotEmpty()) "$left-$right" else left
-    }
-}
-
-@Composable
-private fun countryIsoOptionText(option: CountryIsoOption): String {
-    if (option.isoCode.isNullOrBlank()) {
-        return stringResource(option.labelRes)
-    }
-    val country = stringResource(option.labelRes)
-    val mcc = option.mcc.orEmpty()
-    val iso = option.isoCode
-    return if (mcc.isNotBlank()) {
-        stringResource(R.string.country_iso_option_format_mcc_iso, country, mcc, iso)
-    } else {
-        stringResource(R.string.country_iso_option_format_iso, country, iso)
-    }
-}
-
-private fun findCountryIsoOption(iso: String): CountryIsoOption? {
-    val normalized = sanitizeCountryIsoInput(iso)
-    if (normalized.isBlank()) return null
-    return countryIsoOptions.firstOrNull { it.isoCode == normalized }
-}
-
-private fun findCountryIsoOptionByMcc(mcc: String): CountryIsoOption? {
-    val normalized = sanitizeMccInput(mcc)
-    if (normalized.isBlank()) return null
-    return countryIsoOptions.firstOrNull { option ->
-        val optionMcc = option.mcc?.trim().orEmpty()
-        if (optionMcc.isBlank()) return@firstOrNull false
-        if (optionMcc == normalized) return@firstOrNull true
-        if (!optionMcc.contains('-')) {
-            return@firstOrNull optionMcc == normalized
-        }
-        val (start, end) = optionMcc.split('-', limit = 2)
-        val inputInt = normalized.toIntOrNull() ?: return@firstOrNull false
-        val startInt = start.toIntOrNull() ?: return@firstOrNull false
-        val endInt = end.toIntOrNull() ?: return@firstOrNull false
-        inputInt in startInt..endInt
-    }
-}
-
-@Composable
-private fun currentCountryOverrideSummary(
-    overrideIso: String,
-    overrideMcc: String,
-    currentNetworkIso: String,
-    currentNetworkMcc: String,
-): String {
-    val iso = normalizeCountryIso(overrideIso)
-    val mcc = sanitizeMccInput(overrideMcc)
-    if (iso.isBlank() && mcc.isBlank()) {
-        val actualIso = normalizeCountryIso(currentNetworkIso)
-        val actualMcc = sanitizeMccInput(currentNetworkMcc)
-        if (actualIso.isBlank() && actualMcc.isBlank()) {
-            return stringResource(R.string.country_iso_not_overridden)
-        }
-        if (actualIso.isBlank()) {
-            return stringResource(R.string.country_iso_current_format_mcc_only, actualMcc)
-        }
-        val matchedByIso = findCountryIsoOption(actualIso)
-        val matchedByMcc = if (actualMcc.isNotBlank()) findCountryIsoOptionByMcc(actualMcc) else null
-        val countryName = when {
-            matchedByIso != null -> stringResource(matchedByIso.labelRes)
-            matchedByMcc != null -> stringResource(matchedByMcc.labelRes)
-            else -> actualIso.uppercase(Locale.US)
-        }
-        return if (actualMcc.isNotBlank()) {
-            stringResource(R.string.country_iso_option_format_mcc_iso, countryName, actualMcc, actualIso)
-        } else {
-            stringResource(R.string.country_iso_option_format_iso, countryName, actualIso)
-        }
-    }
-    if (mcc.isNotBlank() && iso.isBlank()) {
-        val matched = findCountryIsoOptionByMcc(mcc)
-        if (matched?.isoCode != null) {
-            val countryName = stringResource(matched.labelRes)
-            return stringResource(R.string.country_iso_option_format_mcc_iso, countryName, mcc, matched.isoCode)
-        }
-        return stringResource(R.string.country_iso_current_format_mcc_only, mcc)
-    }
-    val matchedByIso = findCountryIsoOption(iso)
-    val countryName = matchedByIso?.let { stringResource(it.labelRes) } ?: iso.uppercase(Locale.US)
-    return if (mcc.isNotBlank()) {
-        stringResource(R.string.country_iso_option_format_mcc_iso, countryName, mcc, iso)
-    } else {
-        stringResource(R.string.country_iso_option_format_iso, countryName, iso)
-    }
-}
-
-@Composable
-private fun countryIsoMenuItemText(
-    option: CountryIsoOption,
-): String {
-    return countryIsoOptionText(option)
-}
-
-@Composable
-fun CountryIsoFeatureItem(
-    title: String,
-    description: String,
-    initInput: String,
-    initMcc: String,
-    currentNetworkIso: String,
-    currentNetworkMcc: String,
-    currentNetworkMnc: String,
-    selectedSubId: Int,
-    applySuccessSignal: Int,
-    onInputChange: (String, String) -> Unit,
-    onCommitRequest: () -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    var selectedOptionKey by remember(selectedSubId) { mutableStateOf(COUNTRY_ISO_OPTION_DEFAULT) }
-    var customMccInput by remember(selectedSubId) { mutableStateOf("") }
-    var customIsoInput by remember(selectedSubId) { mutableStateOf("") }
-    val overrideIso = sanitizeCountryIsoInput(initInput)
-    val overrideMcc = sanitizeMccInput(initMcc)
-    val normalizedMnc = currentNetworkMnc.trim()
-    var customMccHadFocus by remember(selectedSubId) { mutableStateOf(false) }
-    var customIsoHadFocus by remember(selectedSubId) { mutableStateOf(false) }
-
-    fun commitCustomInputs(
-        rawMcc: String = customMccInput,
-        rawIso: String = customIsoInput,
-        linkIsoByMcc: Boolean = false,
-    ) {
-        val sanitizedMcc = sanitizeMccInput(rawMcc)
-        val sanitizedIso = sanitizeCountryIsoInput(rawIso)
-        val linkedIso = if (linkIsoByMcc) {
-            if (sanitizedIso.isBlank()) {
-                findCountryIsoOptionByMcc(sanitizedMcc)?.isoCode ?: sanitizedIso
-            } else {
-                sanitizedIso
-            }
-        } else {
-            sanitizedIso
-        }
-        customMccInput = sanitizedMcc
-        customIsoInput = linkedIso
-        onInputChange(linkedIso, sanitizedMcc)
-        onCommitRequest()
-    }
-
-    LaunchedEffect(initInput, initMcc, applySuccessSignal, selectedSubId) {
-        val matchedOptionByIso = findCountryIsoOption(overrideIso)
-        val matchedOptionByMcc = findCountryIsoOptionByMcc(overrideMcc)
-        selectedOptionKey = when {
-            overrideIso.isBlank() && overrideMcc.isBlank() -> {
-                COUNTRY_ISO_OPTION_DEFAULT
-            }
-
-            matchedOptionByMcc != null && (overrideIso.isBlank() || overrideIso == matchedOptionByMcc.isoCode) -> {
-                matchedOptionByMcc.key
-            }
-
-            matchedOptionByIso != null && (overrideMcc.isBlank() || matchedOptionByMcc?.key == matchedOptionByIso.key) -> {
-                matchedOptionByIso.key
-            }
-
-            else -> {
-                COUNTRY_ISO_OPTION_OTHER
-            }
-        }
-        customMccInput = overrideMcc
-        customIsoInput = overrideIso
-    }
-    val dropdownDisplayText = if (selectedOptionKey == COUNTRY_ISO_OPTION_DEFAULT) {
-        stringResource(
-            R.string.country_iso_current_value,
-            currentCountryOverrideSummary(
-                overrideIso = overrideIso,
-                overrideMcc = overrideMcc,
-                currentNetworkIso = currentNetworkIso,
-                currentNetworkMcc = currentNetworkMcc,
-            )
-        )
-    } else {
-        countryIsoMenuItemText(
-            countryIsoOptions.firstOrNull { it.key == selectedOptionKey } ?: countryIsoOptions.first()
-        )
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1F)) {
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = !expanded }
-            ) {
-                OutlinedTextField(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                    value = dropdownDisplayText,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = {
-                        Text(
-                            title,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    },
-                    placeholder = {
-                        Text(stringResource(R.string.country_iso_quick_pick_placeholder))
-                    },
-                    singleLine = true,
-                    maxLines = 1,
-                    trailingIcon = {
-                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                    },
-                    supportingText = {
-                        Text(
-                            text = description,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.outline,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                )
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    countryIsoOptions.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(countryIsoMenuItemText(option)) },
-                            onClick = {
-                                expanded = false
-                                selectedOptionKey = option.key
-                                when (option.key) {
-                                    COUNTRY_ISO_OPTION_OTHER -> {
-                                        customMccInput = overrideMcc
-                                        customIsoInput = overrideIso
-                                    }
-
-                                    else -> {
-                                        val selectedIso = option.isoCode.orEmpty()
-                                        val selectedMcc = option.mcc.orEmpty()
-                                        customMccInput = selectedMcc
-                                        customIsoInput = selectedIso
-                                        onInputChange(selectedIso, selectedMcc)
-                                        onCommitRequest()
-                                    }
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused) {
-                            customMccHadFocus = true
-                        } else if (customMccHadFocus) {
-                            customMccHadFocus = false
-                            commitCustomInputs(linkIsoByMcc = true)
-                        }
-                    },
-                value = customMccInput,
-                onValueChange = { raw ->
-                    selectedOptionKey = COUNTRY_ISO_OPTION_OTHER
-                    customMccInput = sanitizeMccInput(raw)
-                },
-                label = { Text(stringResource(R.string.country_iso_mcc_label), fontSize = 14.sp) },
-                placeholder = { Text(stringResource(R.string.country_iso_mcc_placeholder)) },
-                singleLine = true,
-                maxLines = 1,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { commitCustomInputs(linkIsoByMcc = true) }),
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused) {
-                            customIsoHadFocus = true
-                        } else if (customIsoHadFocus) {
-                            customIsoHadFocus = false
-                            commitCustomInputs()
-                        }
-                    },
-                value = customIsoInput,
-                onValueChange = { raw ->
-                    selectedOptionKey = COUNTRY_ISO_OPTION_OTHER
-                    customIsoInput = sanitizeCountryIsoInput(raw)
-                },
-                label = { Text(stringResource(R.string.country_iso_iso_label), fontSize = 14.sp) },
-                placeholder = { Text(stringResource(R.string.country_iso_custom_placeholder)) },
-                singleLine = true,
-                maxLines = 1,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { commitCustomInputs() }),
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                modifier = Modifier.fillMaxWidth(),
-                value = normalizedMnc,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text(stringResource(R.string.country_iso_mnc_label), fontSize = 14.sp) },
-                placeholder = { Text(stringResource(R.string.country_iso_mnc_placeholder)) },
-                singleLine = true,
-                maxLines = 1,
-                supportingText = {
-                    Text(
-                        text = stringResource(R.string.country_iso_mnc_desc),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-            )
-        }
-    }
-}
-
-@Composable
-fun StringFeatureItem(
-    title: String,
-    description: String,
-    initInput: String,
-    onInputChange: (String) -> Unit,
-    onCommitInput: (String) -> Unit,
-) {
-    var input by remember { mutableStateOf(initInput) }
-    var hadFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(initInput) {
-        input = initInput
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            modifier = Modifier
-                .weight(1F)
-                .onFocusChanged { focusState ->
-                    if (focusState.isFocused) {
-                        hadFocus = true
-                    } else if (hadFocus) {
-                        hadFocus = false
-                        onCommitInput(input)
-                    }
-                },
-            value = input,
-            onValueChange = {
-                input = it
-                onInputChange(it)
-            },
-            label = {
-                Text(
-                    title,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            },
-            supportingText = {
-                Text(
-                    text = description,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            },
-            singleLine = true,
-            maxLines = 1,
-            keyboardOptions = KeyboardOptions(
-                imeAction = ImeAction.Done,
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    onCommitInput(input)
-                }
-            ),
-        )
-    }
 }
 
 @Composable

@@ -23,7 +23,6 @@ data class ConfigBackupSnapshot(
     val mnc: String,
     val countryIso: String,
     val featureValues: Map<Feature, FeatureValue>,
-    val countryMccOverride: String = "",
 )
 
 data class ApnDraftConfig(

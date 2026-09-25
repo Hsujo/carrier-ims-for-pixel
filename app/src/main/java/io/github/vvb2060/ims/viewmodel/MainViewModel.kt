@@ -379,7 +379,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     suspend fun onApplyConfiguration(
         selectedSim: SimSelection,
         map: Map<Feature, FeatureValue>,
-        countryMccOverride: String? = null,
     ): String? {
         // 构建传递给底层 ImsModifier 的配置 Bundle
         val carrierName: String? = null
@@ -389,11 +388,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 selectedSim,
                 enableTikTokFix
             )
-        val countryMcc = countryMccOverride
-            ?.let { ToolRules.normalizeMcc(it) }
-            ?.takeIf { it.length == 3 }
-        val countryMnc =
-            if (selectedSim.subId == -1) null else selectedSim.mnc
         val enableVoLTE = (map[Feature.VOLTE]?.data ?: true) as Boolean
         val enableVoWiFi = (map[Feature.VOWIFI]?.data ?: true) as Boolean
         val enableVT = (map[Feature.VT]?.data ?: true) as Boolean
@@ -408,8 +402,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val bundle = ImsModifier.buildBundle(
             carrierName,
             countryISO,
-            countryMcc,
-            countryMnc,
             enableVoLTE,
             enableVoWiFi,
             enableVT,
@@ -423,12 +415,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         )
         bundle.putInt(ImsModifier.BUNDLE_SELECT_SIM_ID, selectedSim.subId)
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
+        bundle.putBoolean(ImsModifier.BUNDLE_REPLACE, true)
 
         // 调用 Shizuku 服务进行实际修改
         val resultMsg = ShizukuProvider.overrideImsConfig(application, bundle)
         if (resultMsg == null) {
             // 仅在应用成功后保存配置，避免本地状态与系统状态不一致
-            saveConfiguration(selectedSim.subId, map, countryMccOverride)
+            saveConfiguration(selectedSim.subId, map)
         }
         return resultMsg
     }
@@ -439,7 +432,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private fun saveConfiguration(
         subId: Int,
         map: Map<Feature, FeatureValue>,
-        countryMccOverride: String?,
     ) {
         val prefs = application.getSharedPreferences("sim_config_$subId", Context.MODE_PRIVATE)
         val keepTikTokRandomIso = prefs.getString(TIKTOK_RANDOM_ISO_PREF_KEY, null)
@@ -457,23 +449,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             } else {
                 remove(TIKTOK_RANDOM_ISO_PREF_KEY)
             }
-            val normalizedCountryMcc = countryMccOverride
-                ?.let { ToolRules.normalizeMcc(it) }
-                ?.takeIf { it.length == 3 }
-            if (normalizedCountryMcc != null) {
-                putString(COUNTRY_MCC_PREF_KEY, normalizedCountryMcc)
-            } else {
-                remove(COUNTRY_MCC_PREF_KEY)
-            }
         }
-    }
-
-    fun loadSavedCountryMccOverride(subId: Int): String {
-        if (subId < 0) return ""
-        return application
-            .getSharedPreferences("sim_config_$subId", Context.MODE_PRIVATE)
-            .getString(COUNTRY_MCC_PREF_KEY, "")
-            .orEmpty()
     }
 
     /**
@@ -644,7 +620,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         selectedSim: SimSelection,
         featureMap: Map<Feature, FeatureValue>,
         name: String,
-        countryMccOverride: String,
     ): ConfigBackupSnapshot {
         val snapshot = ConfigBackupSnapshot(
             id = UUID.randomUUID().toString(),
@@ -658,7 +633,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             featureValues = Feature.entries.associateWith { feature ->
                 featureMap[feature] ?: FeatureValue(feature.defaultValue, feature.valueType)
             },
-            countryMccOverride = ToolRules.normalizeMcc(countryMccOverride),
         )
         configBackupPrefs.edit {
             putString(snapshot.id, snapshot.toJson().toString())
@@ -776,7 +750,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             put("mcc", mcc)
             put("mnc", mnc)
             put("country_iso", countryIso)
-            put("country_mcc_override", countryMccOverride)
             put("features", features)
         }
     }
@@ -808,7 +781,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 mnc = json.optString("mnc"),
                 countryIso = json.optString("country_iso"),
                 featureValues = features,
-                countryMccOverride = json.optString("country_mcc_override"),
             )
         }.getOrNull()
     }
@@ -1003,7 +975,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             }
         }
 
-        emitLine("[7/8] 网络验证与国家码覆盖状态")
+        emitLine("[7/8] 网络验证状态")
         val captiveState = runCatching { queryCaptivePortalFixState() }.getOrNull()
         if (captiveState == null) {
             emitLine("- 网络验证状态读取失败")
@@ -1012,8 +984,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             emitLine("- HTTP 验证地址 = ${captiveState.httpUrl}")
             emitLine("- HTTPS 验证地址 = ${captiveState.httpsUrl}")
         }
-        val savedMcc = loadSavedCountryMccOverride(selectedSim.subId)
-        emitLine("- 本地保存 MCC 覆盖 = ${savedMcc.ifBlank { "(空)" }}")
 
         emitLine("[8/8] 结论")
         val selectedImsStatus = imsStatusBySubId[selectedSim.subId]
@@ -1177,11 +1147,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         for (sim in simList) {
             val saved = loadConfiguration(sim.subId) ?: continue
             attempted++
-            val resultMsg = onApplyConfiguration(
-                sim,
-                saved,
-                countryMccOverride = loadSavedCountryMccOverride(sim.subId)
-            )
+            val resultMsg = onApplyConfiguration(sim, saved)
             if (resultMsg == null) {
                 success++
             } else {

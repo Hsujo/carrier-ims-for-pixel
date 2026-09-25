@@ -20,7 +20,6 @@ class ToolRulesTest {
             mnc = "01",
             countryIso = "cn",
             featureValues = emptyMap(),
-            countryMccOverride = "310",
         )
 
         assertFalse(ToolRules.requiresBackupMismatchConfirmation(backup, currentMcc = "460", currentMnc = "01"))

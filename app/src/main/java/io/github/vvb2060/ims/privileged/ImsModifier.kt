@@ -11,10 +11,10 @@ import android.os.ServiceManager
 import android.system.Os
 import android.telephony.CarrierConfigManager
 import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import android.util.Log
 import com.android.internal.telephony.ITelephony
 import io.github.vvb2060.ims.LogcatRepository
+import io.github.vvb2060.ims.model.FeatureConfigMapper
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 
@@ -27,16 +27,18 @@ class ImsModifier : Instrumentation() {
         private const val KEY_NR_ADVANCED_CAPABLE_PCO_ID = "nr_advanced_capable_pco_id_int"
         private const val KEY_INCLUDE_LTE_FOR_NR_ADVANCED_THRESHOLD_BANDWIDTH =
             "include_lte_for_nr_advanced_threshold_bandwidth_bool"
-        private const val NR_ADVANCED_THRESHOLD_KHZ_FOR_5GA = 110_000
-        private const val NR_ICON_CONFIGURATION_5GA =
-            "connected_mmwave:5G_Plus,connected:5G,connected_rrc_idle:5G,not_restricted_rrc_idle:5G,not_restricted_rrc_con:5G"
-        private const val BUNDLE_COUNTRY_MCC_OVERRIDE = "country_mcc_override"
-        private const val BUNDLE_COUNTRY_MNC_HINT = "country_mnc_hint"
+        private const val NR_ADVANCED_THRESHOLD_KHZ_FOR_5GA =
+            FeatureConfigMapper.NR_ADVANCED_THRESHOLD_KHZ_FOR_5GA
+        private const val NR_ICON_CONFIGURATION_5GA = FeatureConfigMapper.NR_ICON_CONFIGURATION_5GA
         private val NR_ADVANCED_BANDS_FOR_CHINA = intArrayOf(
             1, 3, 8, 28, 41, 78, 79
         )
         const val BUNDLE_SELECT_SIM_ID = "select_sim_id"
         const val BUNDLE_RESET = "reset"
+
+        // overrideConfig 是 putAll 合并语义：只写「开启」的 key 无法撤销旧覆盖。
+        // 置为 true 时先清空该 SIM 的覆盖再写入完整配置，关闭的开关才会回到运营商默认值。
+        const val BUNDLE_REPLACE = "replace"
         const val BUNDLE_PREFER_PERSISTENT = "prefer_persistent"
         const val BUNDLE_RESULT = "result"
         const val BUNDLE_RESULT_MSG = "result_msg"
@@ -48,8 +50,6 @@ class ImsModifier : Instrumentation() {
         fun buildBundle(
             carrierName: String?,
             countryISO: String?,
-            countryMcc: String?,
-            countryMncHint: String?,
             enableVoLTE: Boolean,
             enableVoWiFi: Boolean,
             enableVT: Boolean,
@@ -76,12 +76,6 @@ class ImsModifier : Instrumentation() {
                         countryISO
                     )
                 }
-            }
-            normalizeMccForOverride(countryMcc)?.let {
-                bundle.putString(BUNDLE_COUNTRY_MCC_OVERRIDE, it)
-            }
-            normalizeMncForOverride(countryMncHint)?.let {
-                bundle.putString(BUNDLE_COUNTRY_MNC_HINT, it)
             }
             // VoLTE 配置
             if (enableVoLTE) {
@@ -179,19 +173,6 @@ class ImsModifier : Instrumentation() {
             }
             return bundle
         }
-
-        private fun normalizeMccForOverride(raw: String?): String? {
-            if (raw.isNullOrBlank()) return null
-            val firstPart = raw.trim().substringBefore('-')
-            val digits = firstPart.filter { it.isDigit() }.take(3)
-            return digits.takeIf { it.length == 3 }
-        }
-
-        private fun normalizeMncForOverride(raw: String?): String? {
-            if (raw.isNullOrBlank()) return null
-            val digits = raw.filter { it.isDigit() }.take(3)
-            return digits.takeIf { it.length in 2..3 }
-        }
     }
 
     override fun onCreate(arguments: Bundle) {
@@ -260,13 +241,20 @@ class ImsModifier : Instrumentation() {
             arguments.remove(BUNDLE_RESET)
             val preferPersistent = arguments.getBoolean(BUNDLE_PREFER_PERSISTENT, false)
             arguments.remove(BUNDLE_PREFER_PERSISTENT)
-            val countryMccOverride = arguments.getString(BUNDLE_COUNTRY_MCC_OVERRIDE)
-            arguments.remove(BUNDLE_COUNTRY_MCC_OVERRIDE)
-            val countryMncHint = arguments.getString(BUNDLE_COUNTRY_MNC_HINT)
-            arguments.remove(BUNDLE_COUNTRY_MNC_HINT)
+            val replace = arguments.getBoolean(BUNDLE_REPLACE, false)
+            arguments.remove(BUNDLE_REPLACE)
             val baseValues = if (reset) null else arguments.toPersistableBundle()
             for (subId in subIds) {
                 val values = baseValues?.let { PersistableBundle(it) }
+                if (replace && values != null) {
+                    Log.i(TAG, "clear existing overrides before replace for subId $subId")
+                    applyOverrideConfig(
+                        cm,
+                        subId,
+                        null,
+                        preferPersistent = preferPersistent
+                    )
+                }
                 Log.i(TAG, "overrideConfig for subId $subId with values $values")
                 applyOverrideConfig(
                     cm,
@@ -276,8 +264,6 @@ class ImsModifier : Instrumentation() {
                 )
                 if (reset) {
                     clearCarrierTestOverride(subId)
-                } else if (!countryMccOverride.isNullOrBlank()) {
-                    applyCarrierTestMccOverride(subId, countryMccOverride, countryMncHint)
                 }
             }
         } finally {
@@ -341,43 +327,6 @@ class ImsModifier : Instrumentation() {
     }
 
     @Throws(Exception::class)
-    private fun applyCarrierTestMccOverride(
-        subId: Int,
-        mccOverrideRaw: String,
-        mncHintRaw: String?,
-    ) {
-        val normalizedMcc = mccOverrideRaw.filter { it.isDigit() }.take(3)
-        if (normalizedMcc.length != 3) {
-            Log.w(TAG, "skip carrier test override: invalid MCC=$mccOverrideRaw")
-            return
-        }
-        val normalizedMnc = mncHintRaw
-            ?.filter { it.isDigit() }
-            ?.take(3)
-            ?.takeIf { it.length in 2..3 }
-            ?: resolveCurrentMnc(subId)
-            ?: throw IllegalStateException("unable to resolve MNC for subId=$subId")
-        val mccmnc = normalizedMcc + normalizedMnc
-        val binder = ServiceManager.getService(Context.TELEPHONY_SERVICE)
-            ?: throw IllegalStateException("phone service unavailable")
-        val telephony = ITelephony.Stub.asInterface(ShizukuBinderWrapper(binder))
-            ?: throw IllegalStateException("ITelephony unavailable")
-        Log.i(TAG, "setCarrierTestOverride for subId=$subId mccmnc=$mccmnc")
-        telephony.setCarrierTestOverride(
-            subId,
-            mccmnc,
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            null,
-            null
-        )
-    }
-
-    @Throws(Exception::class)
     private fun clearCarrierTestOverride(subId: Int) {
         val binder = ServiceManager.getService(Context.TELEPHONY_SERVICE)
             ?: throw IllegalStateException("phone service unavailable")
@@ -407,15 +356,16 @@ class ImsModifier : Instrumentation() {
             TAG,
             "clearCarrierTestOverride unavailable, fallback setCarrierTestOverride(current=$currentMccMnc) for subId=$subId"
         )
+        // 其余字段传 null 表示不覆盖；传 "" 会把 IMSI/ICCID/GID/SPN 覆盖成空值
         telephony.setCarrierTestOverride(
             subId,
             currentMccMnc,
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
             null,
             null
         )
@@ -436,17 +386,6 @@ class ImsModifier : Instrumentation() {
             ?: info.mnc.takeIf { it in 0..999 }?.toString()?.padStart(2, '0')
 
         return if (mcc != null && mnc != null) mcc + mnc else null
-    }
-
-    private fun resolveCurrentMnc(subId: Int): String? {
-        val telephony = context.getSystemService(TelephonyManager::class.java) ?: return null
-        val bySub = telephony.createForSubscriptionId(subId).simOperator.orEmpty()
-        val operator = bySub.filter { it.isDigit() }
-        if (operator.length >= 5) {
-            return operator.substring(3)
-        }
-        val fallback = telephony.simOperator.orEmpty().filter { it.isDigit() }
-        return if (fallback.length >= 5) fallback.substring(3) else null
     }
 
     @Suppress("UNCHECKED_CAST", "DEPRECATION")

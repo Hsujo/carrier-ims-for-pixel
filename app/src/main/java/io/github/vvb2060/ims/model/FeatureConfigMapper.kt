@@ -16,6 +16,11 @@ object FeatureConfigMapper {
     private const val KEY_SIM_COUNTRY_ISO_OVERRIDE = "sim_country_iso_override_string"
     private val FIVE_G_THRESHOLDS = intArrayOf(-128, -118, -108, -98)
 
+    // 5GA / 5G+ 图标写入值，ImsModifier 写入与此处读回共用
+    const val NR_ADVANCED_THRESHOLD_KHZ_FOR_5GA = 110_000
+    const val NR_ICON_CONFIGURATION_5GA =
+        "connected_mmwave:5G_Plus,connected:5G,connected_rrc_idle:5G,not_restricted_rrc_idle:5G,not_restricted_rrc_con:5G"
+
     val readKeys: Array<String> = linkedSetOf(
         CarrierConfigManager.KEY_CARRIER_NAME_OVERRIDE_BOOL,
         CarrierConfigManager.KEY_CARRIER_NAME_STRING,
@@ -114,13 +119,15 @@ object FeatureConfigMapper {
         val thresholdEnabled = thresholds?.contentEquals(FIVE_G_THRESHOLDS) == true
         map[Feature.FIVE_G_THRESHOLDS] = FeatureValue(thresholdEnabled, FeatureValueType.BOOLEAN)
 
-        val fiveGPlusIconEnabled = bundle.containsKey(KEY_NR_ADVANCED_THRESHOLD_BANDWIDTH_KHZ) ||
-            bundle.containsKey(KEY_ADDITIONAL_NR_ADVANCED_BANDS) ||
-            bundle.containsKey(KEY_5G_ICON_CONFIGURATION) ||
-            bundle.containsKey(KEY_NR_ADVANCED_CAPABLE_PCO_ID) ||
-            bundle.containsKey(
-                KEY_INCLUDE_LTE_FOR_NR_ADVANCED_THRESHOLD_BANDWIDTH
-            )
+        // getConfigForSubId 返回的配置总会带上默认值，不能用 containsKey 判断，需要比对写入值
+        val fiveGPlusIconEnabled = isFiveGPlusIconApplied(
+            thresholdKhz = if (bundle.containsKey(KEY_NR_ADVANCED_THRESHOLD_BANDWIDTH_KHZ)) {
+                bundle.getInt(KEY_NR_ADVANCED_THRESHOLD_BANDWIDTH_KHZ)
+            } else {
+                null
+            },
+            iconConfiguration = bundle.getStringOrDefault(KEY_5G_ICON_CONFIGURATION, ""),
+        )
         map[Feature.FIVE_G_PLUS_ICON] = FeatureValue(fiveGPlusIconEnabled, FeatureValueType.BOOLEAN)
 
         val show4g = bundle.getBooleanOrDefault(
@@ -130,6 +137,11 @@ object FeatureConfigMapper {
         map[Feature.SHOW_4G_FOR_LTE] = FeatureValue(show4g, FeatureValueType.BOOLEAN)
 
         return map
+    }
+
+    fun isFiveGPlusIconApplied(thresholdKhz: Int?, iconConfiguration: String?): Boolean {
+        return thresholdKhz == NR_ADVANCED_THRESHOLD_KHZ_FOR_5GA &&
+            iconConfiguration == NR_ICON_CONFIGURATION_5GA
     }
 
     private fun Bundle.getBooleanOrDefault(key: String, default: Boolean): Boolean {
