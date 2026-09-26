@@ -300,7 +300,13 @@ class MonitorService : Service() {
             .getOrDefault(emptyList())
             .firstOrNull { it.subId == subId }
         val snapshot = runCatching {
-            SnapshotCollector.collect(this, SnapshotKind.BAD, sim)
+            // 读 SIM 列表偶发失败时 sim 为 null，目标卡照样按已知的 subId 传下去。
+            SnapshotCollector.collect(
+                this,
+                SnapshotKind.BAD,
+                sim,
+                targetSubId = subId.takeIf { it >= 0 },
+            )
         }.getOrNull() ?: return
         SnapshotStore.write(this, snapshot)
         Log.i(TAG, "auto-captured snapshot ${snapshot.name} due to $reason")

@@ -43,6 +43,30 @@ class RealDumpTest {
         assertEquals("3gnet", summaryOf(realConnectivity).fields["apn"])
     }
 
+    private fun summaryFor(connectivity: String, subId: String) = SnapshotSummary.from(
+        Snapshot(
+            kind = SnapshotKind.GOOD,
+            name = "GOOD_real",
+            takenAtMillis = 0L,
+            metadata = mapOf("sub_id" to subId),
+            commands = listOf(
+                CommandResult("dumpsys telephony.registry", "unavailable", "", "binder buffer full"),
+                CommandResult("dumpsys connectivity", "0", connectivity, ""),
+            ),
+            probe = null,
+            probeError = null,
+        )
+    )
+
+    @Test
+    fun connectivityIsScopedToTheTargetSim() {
+        // 目标是 subId=5 时只能看它自己的 PDN（IMS 专用），不能拿 subId=2 上网 PDN 的 APN 充数。
+        val imsOnly = summaryFor(realConnectivity, "5")
+        assertEquals("ims", imsOnly.fields["apn"])
+        assertTrue(imsOnly.fields["connectivity_scope"]!!.contains("mSubId=5"))
+        assertEquals("3gnet", summaryFor(realConnectivity, "2").fields["apn"])
+    }
+
     @Test
     fun dataRatFallsBackToConnectivityWhenRegistryDumpFailed() {
         // telephony.registry 因输出过大采集失败时，仍应从 MOBILE[NR] 得到 RAT。

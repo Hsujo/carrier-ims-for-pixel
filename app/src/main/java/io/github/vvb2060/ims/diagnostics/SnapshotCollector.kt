@@ -53,19 +53,27 @@ object SnapshotCollector {
     /** 真机 dumpsys -l 显示实际服务名是 telephony_ims（下划线），不是 ims。 */
     private val IMS_SERVICE_CANDIDATES = listOf("telephony_ims", "telephony.ims", "ims")
 
-    private val nameFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    // 精确到毫秒：手动采集与后台自动采集可能在同一秒内发生，
+    // 同名目录会让两次快照的文件互相覆盖、混成一份。
+    private const val NAME_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
+    /**
+     * @param targetSubId 目标卡；默认取自 [selectedSim]。SIM 信息读取失败（[selectedSim] 为 null）
+     *        时仍用它限定探测与读取的卡，避免双卡时退回默认数据卡。
+     */
     suspend fun collect(
         context: Context,
         kind: SnapshotKind,
         selectedSim: SimSelection?,
+        targetSubId: Int? = selectedSim?.subId,
         onProgress: (String) -> Unit = {},
     ): Snapshot {
         val now = System.currentTimeMillis()
-        val name = "${kind.prefix}_${nameFormat.format(Date(now))}"
+        // SimpleDateFormat 不是线程安全的，而两次采集可能并发，因此每次新建。
+        val name = "${kind.prefix}_${SimpleDateFormat(NAME_PATTERN, Locale.US).format(Date(now))}"
 
         onProgress("采集设备与 SIM 元数据")
-        val metadata = collectMetadata(context, selectedSim)
+        val metadata = collectMetadata(context, selectedSim, targetSubId)
 
         val commands = mutableListOf<CommandResult>()
 
@@ -129,7 +137,7 @@ object SnapshotCollector {
         var probe: NetworkProbe.Result? = null
         var probeError: String? = null
         try {
-            probe = NetworkProbe.run(context, selectedSim?.subId)
+            probe = NetworkProbe.run(context, targetSubId)
         } catch (t: Throwable) {
             // 探测失败也必须让快照生成，其余证据仍然有价值。
             Log.w(TAG, "network probe failed", t)
@@ -142,6 +150,7 @@ object SnapshotCollector {
     private suspend fun collectMetadata(
         context: Context,
         selectedSim: SimSelection?,
+        targetSubId: Int?,
     ): Map<String, String> {
         val meta = linkedMapOf<String, String>()
         meta["app_version"] = BuildConfig.VERSION_NAME
@@ -176,6 +185,13 @@ object SnapshotCollector {
             meta["carrier"] = selectedSim.carrierName
             // 只保留 ICCID 后四位，完整 ICCID / IMSI / 号码一律不落盘。
             meta["iccid_last4"] = selectedSim.iccId.takeLast(4)
+        } else if (targetSubId != null && targetSubId >= 0) {
+            // SIM 信息读取失败但目标卡已知：仍写入 subId 与卡槽，摘要才能按卡裁剪。
+            meta["sub_id"] = targetSubId.toString()
+            meta["slot_index"] = runCatching {
+                android.telephony.SubscriptionManager.getSlotIndex(targetSubId).toString()
+            }.getOrElse { "UNKNOWN" }
+            meta["sim_info"] = "(lookup failed)"
         } else {
             meta["sub_id"] = "(none selected)"
         }
@@ -196,7 +212,7 @@ object SnapshotCollector {
                 .ifBlank { "(empty)" }
         }
 
-        val subId = selectedSim?.subId ?: -1
+        val subId = targetSubId ?: -1
         if (subId >= 0) {
             val bundle = runCatching {
                 ShizukuProvider.readCarrierConfig(context, subId, FeatureConfigMapper.readKeys)

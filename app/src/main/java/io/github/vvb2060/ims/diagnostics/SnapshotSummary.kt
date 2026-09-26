@@ -74,6 +74,7 @@ data class SnapshotSummary(
             "target_sub_id",
             "probed_sub_id",
             "registry_scope",
+            "connectivity_scope",
         )
 
         /**
@@ -182,7 +183,12 @@ data class SnapshotSummary(
             val scoped = scopeToPhone(telephonyRaw, targetSubId, slotIndex)
             fields["registry_scope"] = scoped.second
             val telephony = scoped.first
-            val connectivity = textOf(snapshot.commands, "dumpsys connectivity")
+            // connectivity 同样要裁到目标卡的 NetworkAgentInfo，否则 APN / 数据状态 / RAT
+            // 会取到另一张卡的，与上面按卡裁剪过的 registry 字段拼成一张「混合卡」。
+            val connectivityRaw = textOf(snapshot.commands, "dumpsys connectivity")
+            val connectivityScoped = scopeConnectivity(connectivityRaw, targetSubId)
+            if (connectivityRaw.isNotBlank()) fields["connectivity_scope"] = connectivityScoped.second
+            val connectivity = connectivityScoped.first
 
             TELEPHONY_PATTERNS.forEach { (field, patterns) ->
                 firstMatch(telephony, patterns)?.let { fields[field] = it }
@@ -368,6 +374,31 @@ data class SnapshotSummary(
                 }
             }
             return text to "could not scope to target SIM; fields may come from another SIM"
+        }
+
+        /**
+         * 把 dumpsys connectivity 裁剪到目标 SIM 的 NetworkAgentInfo 段。
+         *
+         * 归属以 `TelephonyNetworkSpecifier [mSubId = N]` 为准；找不到时退回整份输出，
+         * 并在说明里写明后续字段可能来自另一张卡。
+         */
+        private fun scopeConnectivity(text: String, subId: Int?): Pair<String, String> {
+            if (text.isBlank()) return text to "empty dump"
+            if (subId == null) return text to "no target SIM, using whole dump"
+            val markers = Regex("""NetworkAgentInfo\{""").findAll(text).toList()
+            if (markers.isEmpty()) return text to "no NetworkAgentInfo sections, using whole dump"
+            val sections = markers.mapIndexed { index, match ->
+                val end = if (index + 1 < markers.size) markers[index + 1].range.first else text.length
+                text.substring(match.range.first, end)
+            }
+            val specifier = Regex("""TelephonyNetworkSpecifier \[mSubId = (\d+)]""")
+            val hits = sections.filter { section ->
+                specifier.findAll(section).any { it.groupValues[1].toIntOrNull() == subId }
+            }
+            if (hits.isEmpty()) {
+                return text to "could not scope to subId=$subId; fields may come from another SIM"
+            }
+            return hits.joinToString("\n") to "scoped to TelephonyNetworkSpecifier mSubId=$subId"
         }
 
         private fun textOf(commands: List<CommandResult>, command: String): String =
