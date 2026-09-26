@@ -40,6 +40,10 @@ internal object ShellPermissionDelegation {
     private const val TAG = "ShellPermissionDelegation"
     private const val METHOD_STOP = "stopDelegateShellPermissionIdentity"
 
+    // 同一进程只打印一次设备上的候选签名，避免每次特权调用都刷屏
+    @Volatile
+    private var stopCandidatesLogged = false
+
     /**
      * 尝试开启 shell 权限委托。
      *
@@ -66,6 +70,9 @@ internal object ShellPermissionDelegation {
      *
      * 委托停不掉是真实副作用（本应用的 uid 会继续持有 shell 权限），所以在直接调用因
      * 签名不匹配而失败后，再用反射按方法名兜底一次，尽量真正停下来。
+     *
+     * 另：AOSP 中由 shell 启动、带 UiAutomationConnection 的 instrumentation 结束（finish）时，
+     * AMS 也会撤销该委托，而各特权类都在清理后立即 finish；这里主动停止是为了尽早收回。
      *
      * @return 清理成功返回 null；失败返回原因，调用方应当记录为警告而非主操作失败。
      */
@@ -97,13 +104,36 @@ internal object ShellPermissionDelegation {
         return try {
             val method = am.javaClass.methods.firstOrNull {
                 it.name == METHOD_STOP && it.parameterTypes.isEmpty()
-            } ?: throw NoSuchMethodException("$METHOD_STOP() not found on ${am.javaClass.name}")
+            } ?: run {
+                logStopCandidates(am, tag)
+                throw NoSuchMethodException("$METHOD_STOP() not found on ${am.javaClass.name}")
+            }
             method.invoke(am)
             null
         } catch (t: Throwable) {
             Log.w(tag, "reflective $METHOD_STOP failed, delegation may still be active", t)
             t
         }
+    }
+
+    /**
+     * 无参的停止方法不存在时，打印设备上与委托相关的全部方法签名。
+     *
+     * 新系统上的替代签名无法事先得知，不能靠猜参数去调用；
+     * 先把真实签名记进日志，再据此做精确适配。
+     */
+    private fun logStopCandidates(am: IActivityManager, tag: String) {
+        if (stopCandidatesLogged) return
+        stopCandidatesLogged = true
+        runCatching {
+            val candidates = am.javaClass.methods
+                .filter { it.name.contains("DelegateShellPermission") }
+                .map { method ->
+                    "${method.name}(${method.parameterTypes.joinToString { it.name }})"
+                }
+                .sorted()
+            Log.w(tag, "delegate shell permission methods on ${am.javaClass.name}: $candidates")
+        }.onFailure { Log.w(tag, "failed to list delegate shell permission methods", it) }
     }
 
     /**
