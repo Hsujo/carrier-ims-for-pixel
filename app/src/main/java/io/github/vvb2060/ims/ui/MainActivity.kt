@@ -75,6 +75,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.Modifier
@@ -115,6 +116,7 @@ import io.github.vvb2060.ims.tiles.SIM2VoLTETileService
 import io.github.vvb2060.ims.viewmodel.MainViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -386,6 +388,14 @@ class MainActivity : BaseActivity() {
         // 每次回到前台都重新读取系统真实 CarrierConfig：官方版或其他工具可能在
         // 本应用不可见期间改动过同一套配置，本地状态不能被当成系统状态。
         var configRefreshSignal by remember { mutableIntStateOf(0) }
+        // 正在从系统读取当前卡配置的次数（切卡、回到前台都会触发）。读取期间
+        // committedFeatureSwitches 还不是这张卡的真实状态：此时写入会用默认值或
+        // 另一张卡的值覆盖它，因此与写入期间一样，不允许发起新的写入。
+        // 用计数而不是布尔值：被取消的旧读取与新读取的收尾顺序不定。
+        var configRefreshesInFlight by remember { mutableIntStateOf(0) }
+
+        // 写入进行中，或正在读取当前卡的配置：两种情况下都不能再发起写入。
+        fun configBusy() = applyingConfiguration || configRefreshesInFlight > 0
         val lifecycleOwner = LocalLifecycleOwner.current
         DisposableEffect(lifecycleOwner) {
             val observer = LifecycleEventObserver { _, event ->
@@ -449,24 +459,33 @@ class MainActivity : BaseActivity() {
         }
         LaunchedEffect(selectedSim, shizukuStatus, allSimList, configRefreshSignal) {
             val currentSelected = selectedSim ?: return@LaunchedEffect
-            committedFeatureSwitches.clear()
-            val currentState = if (shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0) {
-                viewModel.loadCurrentState(currentSelected.subId)
-            } else {
-                null
-            }
-            val currentConfig = currentState?.features
-            if (currentConfig != null) {
-                committedFeatureSwitches.putAll(currentConfig)
-            } else {
-                val savedConfig = viewModel.loadConfiguration(currentSelected.subId)
-                if (savedConfig != null) {
-                    committedFeatureSwitches.putAll(savedConfig)
+            configRefreshesInFlight++
+            val currentState = try {
+                // 写入进行中时先等它结束：此刻读到的是写入前的状态，
+                // 写入读回刷新界面之后，又会被这里盖回旧值。
+                snapshotFlow { applyingConfiguration }.first { !it }
+                committedFeatureSwitches.clear()
+                val state = if (shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0) {
+                    viewModel.loadCurrentState(currentSelected.subId)
                 } else {
-                    committedFeatureSwitches.putAll(viewModel.loadDefaultPreferences())
+                    null
                 }
+                val currentConfig = state?.features
+                if (currentConfig != null) {
+                    committedFeatureSwitches.putAll(currentConfig)
+                } else {
+                    val savedConfig = viewModel.loadConfiguration(currentSelected.subId)
+                    if (savedConfig != null) {
+                        committedFeatureSwitches.putAll(savedConfig)
+                    } else {
+                        committedFeatureSwitches.putAll(viewModel.loadDefaultPreferences())
+                    }
+                }
+                syncFeatureState(featureSwitches, committedFeatureSwitches)
+                state
+            } finally {
+                configRefreshesInFlight--
             }
-            syncFeatureState(featureSwitches, committedFeatureSwitches)
             nrActualAvailabilities = if (
                 shizukuStatus == ShizukuStatus.READY && currentSelected.subId >= 0
             ) {
@@ -511,7 +530,7 @@ class MainActivity : BaseActivity() {
                         committedFeatureSwitches[feature] ?: defaultFeatureValue(feature)
                     featureSwitches[feature] = value
                     committedFeatureSwitches[feature] = value
-                    if (applyingConfiguration) {
+                    if (configBusy()) {
                         featureSwitches[feature] = previousUiValue
                         committedFeatureSwitches[feature] = previousCommittedValue
                         return@handleFeatureSwitchChange
@@ -640,6 +659,8 @@ class MainActivity : BaseActivity() {
                 Toast.makeText(context, R.string.shizuku_not_running_msg, Toast.LENGTH_LONG).show()
                 return@restoreBackup
             }
+            // 与其他写入一致：写入或读取当前卡配置期间不发起新的写入。
+            if (configBusy()) return@restoreBackup
             if (!allowMismatch &&
                 ToolRules.requiresBackupMismatchConfirmation(backup, sim.mcc, sim.mnc)
             ) {
@@ -773,10 +794,10 @@ class MainActivity : BaseActivity() {
                         selectedSim = selectedSim,
                         imsRegistrationStatusBySubId = imsRegistrationStatusMap,
                         imsRegistrationLoadingBySubId = imsRegistrationLoadingMap,
-                        featureSwitchesEnabled = !applyingConfiguration,
+                        featureSwitchesEnabled = !configBusy(),
                         onImsRegistrationToggle = { subId, targetChecked ->
                             if (!targetChecked) return@FeaturesCard
-                            if (applyingConfiguration) return@FeaturesCard
+                            if (configBusy()) return@FeaturesCard
                             if (shizukuStatus != ShizukuStatus.READY) {
                                 Toast.makeText(context, R.string.shizuku_not_running_msg, Toast.LENGTH_LONG).show()
                                 return@FeaturesCard
@@ -863,7 +884,7 @@ class MainActivity : BaseActivity() {
                                 Toast.makeText(context, R.string.shizuku_not_running_msg, Toast.LENGTH_LONG).show()
                                 return@FeaturesCard
                             }
-                            if (applyingConfiguration) {
+                            if (configBusy()) {
                                 return@FeaturesCard
                             }
                             scope.launch {
@@ -980,7 +1001,7 @@ class MainActivity : BaseActivity() {
                         selectedSim = extraSelectedSim,
                         allSimList = extraSimList,
                         tiktokEnabled = (featureSwitches[Feature.TIKTOK_NETWORK_FIX]?.data as? Boolean) == true,
-                        featureSwitchesEnabled = !applyingConfiguration,
+                        featureSwitchesEnabled = !configBusy(),
                         checkingCaptivePortalStatus = checkingCaptivePortalStatus,
                         fixingCaptivePortal = fixingCaptivePortal,
                         captivePortalFixState = captivePortalFixState,
@@ -1021,7 +1042,7 @@ class MainActivity : BaseActivity() {
                                 Toast.makeText(context, R.string.nr_mode_requires_single_sim, Toast.LENGTH_SHORT).show()
                             } else if (shizukuStatus != ShizukuStatus.READY) {
                                 Toast.makeText(context, R.string.shizuku_not_running_msg, Toast.LENGTH_LONG).show()
-                            } else if (!applyingConfiguration) {
+                            } else if (!configBusy()) {
                                 scope.launch {
                                     applyingConfiguration = true
                                     try {
