@@ -241,26 +241,31 @@ data class SnapshotSummary(
 
             val probe = snapshot.probe
             if (probe != null) {
-                val link = probe.link
-                fields["validated"] = link.validated?.toString() ?: UNKNOWN
-                fields["ipv4"] = link.ipv4.joinToString().ifBlank { "(none)" }
-                fields["ipv6"] = link.ipv6.joinToString().ifBlank { "(none)" }
-                fields["default_route"] = "v4=${link.hasDefaultRouteV4},v6=${link.hasDefaultRouteV6}"
-                fields["dns"] = link.dnsServers.joinToString().ifBlank { "(none)" }
-                fields["ip_probe"] = "${probe.ipReachability.successes}/${probe.ipReachability.attempts}"
-                fields["dns_probe"] = "${probe.dnsResolution.successes}/${probe.dnsResolution.attempts}"
-                probe.latency?.let { lat ->
-                    fields["rtt_min_ms"] = lat.minMs?.toString() ?: UNKNOWN
-                    fields["rtt_max_ms"] = lat.maxMs?.toString() ?: UNKNOWN
-                    // 有样本被超时截断时，抖动只是下界，必须标出来 ——
-                    // 否则读到的数会比真实情况小，而且恰好小在最差的时刻。
-                    fields["rtt_jitter_ms"] = lat.jitterMs?.let {
-                        if (lat.jitterIsLowerBound) ">=$it (${lat.censored} 次探测超时)" else "$it"
-                    } ?: UNKNOWN
-                    fields["latency_verdict"] = lat.verdict
-                    fields["rtt_samples"] = "${lat.samples.size} 次" +
-                        (if (lat.censored > 0) "（含 ${lat.censored} 次超时）" else "") +
-                        (if (lat.failures > 0) "，失败 ${lat.failures} 次" else "")
+                // 没测到目标卡（测到另一张卡、无法证实归属，或根本没拿到蜂窝网络而走了默认路由）时，
+                // 链路与探测指标不属于这张卡：保持 UNKNOWN，由 probe_verdict 说明原因，
+                // 原始结果仍完整保留在 probes.txt。否则 BAD/GOOD 对比会把别的网络的变化算到这张卡头上。
+                if (probe.measuresTarget) {
+                    val link = probe.link
+                    fields["validated"] = link.validated?.toString() ?: UNKNOWN
+                    fields["ipv4"] = link.ipv4.joinToString().ifBlank { "(none)" }
+                    fields["ipv6"] = link.ipv6.joinToString().ifBlank { "(none)" }
+                    fields["default_route"] = "v4=${link.hasDefaultRouteV4},v6=${link.hasDefaultRouteV6}"
+                    fields["dns"] = link.dnsServers.joinToString().ifBlank { "(none)" }
+                    fields["ip_probe"] = "${probe.ipReachability.successes}/${probe.ipReachability.attempts}"
+                    fields["dns_probe"] = "${probe.dnsResolution.successes}/${probe.dnsResolution.attempts}"
+                    probe.latency?.let { lat ->
+                        fields["rtt_min_ms"] = lat.minMs?.toString() ?: UNKNOWN
+                        fields["rtt_max_ms"] = lat.maxMs?.toString() ?: UNKNOWN
+                        // 有样本被超时截断时，抖动只是下界，必须标出来 ——
+                        // 否则读到的数会比真实情况小，而且恰好小在最差的时刻。
+                        fields["rtt_jitter_ms"] = lat.jitterMs?.let {
+                            if (lat.jitterIsLowerBound) ">=$it (${lat.censored} 次探测超时)" else "$it"
+                        } ?: UNKNOWN
+                        fields["latency_verdict"] = lat.verdict
+                        fields["rtt_samples"] = "${lat.samples.size} 次" +
+                            (if (lat.censored > 0) "（含 ${lat.censored} 次超时）" else "") +
+                            (if (lat.failures > 0) "，失败 ${lat.failures} 次" else "")
+                    }
                 }
                 fields["probe_verdict"] = probe.verdict.substringBefore(":")
                 fields["target_sub_id"] = probe.targetSubId?.toString() ?: UNKNOWN

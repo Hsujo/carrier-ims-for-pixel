@@ -92,4 +92,55 @@ class SnapshotSummaryTest {
         assertEquals(original.fields["nr_state"], restored.fields["nr_state"])
         assertEquals(original.fields["nsa_sa_clue"], restored.fields["nsa_sa_clue"])
     }
+
+    private fun probe(probedSubId: Int?, verdict: String) = NetworkProbe.Result(
+        link = NetworkProbe.LinkSnapshot(
+            unreadable = false,
+            hasCellularNetwork = true,
+            validated = true,
+            interfaceName = "rmnet1",
+            ipv4 = listOf("10.1.2.3"),
+            ipv6 = emptyList(),
+            hasDefaultRouteV4 = true,
+            hasDefaultRouteV6 = false,
+            routes = emptyList(),
+            dnsServers = emptyList(),
+            capabilities = null,
+            subId = probedSubId,
+            hasInternetCapability = true,
+            error = null,
+        ),
+        ipReachability = NetworkProbe.ProbeResult(
+            label = "ip", target = "223.5.5.5", attempts = 2, successes = 2,
+            lastError = null, boundToCellular = true, details = emptyList(),
+        ),
+        dnsResolution = NetworkProbe.ProbeResult(
+            label = "dns", target = "www.baidu.com", attempts = 0, successes = 0,
+            lastError = null, boundToCellular = true, details = emptyList(),
+        ),
+        latency = null,
+        verdict = verdict,
+        targetSubId = 1,
+        probedSubId = probedSubId,
+        onCellular = true,
+    )
+
+    @Test
+    fun probeFieldsStayUnknownWhenAnotherSimWasMeasured() {
+        // 测到的是另一张卡时，链路与探测指标不能记在目标卡的摘要里，只留判定。
+        val wrongSim = SnapshotSummary.from(
+            snapshot(metadata = mapOf("sub_id" to "1"))
+                .copy(probe = probe(probedSubId = 2, verdict = "WRONG_SIM_PROBED: subId=2"))
+        )
+        assertEquals(SnapshotSummary.UNKNOWN, wrongSim.fields["ipv4"])
+        assertEquals(SnapshotSummary.UNKNOWN, wrongSim.fields["ip_probe"])
+        assertEquals("WRONG_SIM_PROBED", wrongSim.fields["probe_verdict"])
+
+        val targetSim = SnapshotSummary.from(
+            snapshot(metadata = mapOf("sub_id" to "1"))
+                .copy(probe = probe(probedSubId = 1, verdict = "OK: fine"))
+        )
+        assertEquals("10.1.2.3", targetSim.fields["ipv4"])
+        assertEquals("2/2", targetSim.fields["ip_probe"])
+    }
 }

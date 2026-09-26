@@ -341,8 +341,12 @@ class MonitorService : Service() {
             )
         }.getOrNull() ?: return
         SnapshotStore.write(this, snapshot)
-        Log.i(TAG, "auto-captured snapshot ${snapshot.name} due to $reason")
-        _autoCaptures.value = _autoCaptures.value + 1
+            .onSuccess {
+                Log.i(TAG, "auto-captured snapshot ${snapshot.name} due to $reason")
+                _autoCaptures.value = _autoCaptures.value + 1
+            }
+            // 没写成就没有可导出的证据：不能照样计数，免得用户以为现场已经保存。
+            .onFailure { Log.w(TAG, "failed to save auto-captured snapshot ${snapshot.name} ($reason)", it) }
     }
 
     private fun createChannel() {
