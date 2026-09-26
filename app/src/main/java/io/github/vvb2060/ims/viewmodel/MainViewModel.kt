@@ -18,6 +18,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.vvb2060.ims.BuildConfig
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.ShizukuProvider
+import io.github.vvb2060.ims.model.ApplyReadbackRules
 import io.github.vvb2060.ims.model.CarrierIsoRules
 import io.github.vvb2060.ims.model.Feature
 import io.github.vvb2060.ims.model.NrMode
@@ -78,6 +79,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         private const val NETWORK_EXIT_CHECK_TIMEOUT_MS = 4_000
         private const val IMS_REGISTER_RETRY_COUNT = 4
         private const val IMS_REGISTER_RETRY_DELAY_MS = 2_000L
+        // 写入后读回尚未体现写入时的重读次数与间隔：CarrierConfig 的生效是异步的
+        private const val READBACK_RETRY_COUNT = 3
+        private const val READBACK_RETRY_DELAY_MS = 300L
         private const val NETWORK_EXIT_API_URL = "https://ipapi.co/json/"
         private val DEFAULT_CAPTIVE_PORTAL_TEST_URLS = listOf(
             "http://connectivitycheck.gstatic.cn/generate_204",
@@ -477,7 +481,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // 无论 instrumentation 报成功还是失败，都重新读回真实 CarrierConfig。
         // 读回结果既用于刷新 UI，也用于在 Android 17 上纠正误判：
         // 权限委托清理失败会让一次已经成功的写入被报成失败。
-        val readback = loadCurrentConfiguration(selectedSim.subId)
+        val readback = readBackAfterApply(selectedSim.subId, map, countryISO)
 
         val status = when {
             overrideResult.isSuccess && overrideResult.cleanupWarning != null ->
@@ -543,34 +547,46 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         readback: Map<Feature, FeatureValue>,
         requested: Map<Feature, FeatureValue>,
         resolvedCountryIso: String?,
-    ): Boolean {
-        var verifiable = 0
-        for ((feature, target) in requested) {
-            // 运营商名称当前不参与写入。
-            if (feature == Feature.CARRIER_NAME) continue
-            // ISO 与 TikTok 修复由 resolvedCountryIso 统一校验。
-            if (feature == Feature.COUNTRY_ISO || feature == Feature.TIKTOK_NETWORK_FIX) continue
-            // NR 模式单独校验（见下），且仅在 5G NR 启用时才会被写入。
-            if (feature == Feature.NR_MODE) continue
-            val enabled = target.data as? Boolean ?: continue
-            if (!enabled) continue
-            verifiable++
-            if ((readback[feature]?.data as? Boolean) != true) return false
+    ): Boolean = ApplyReadbackRules.confirms(
+        readback,
+        requested,
+        resolvedCountryIso,
+        Build.VERSION.SDK_INT,
+    )
+
+    /**
+     * 读回写入后的 CarrierConfig，必要时短暂等待写入生效。
+     *
+     * CarrierConfig 的生效是异步的：写入刚返回就读，可能还是写入前的值。
+     * 若直接拿它刷新界面并落盘，刚打开的开关会被「读回」成关闭而回弹，旧值也会被存下来。
+     * 因此只要存在可校验项、且读回尚未体现写入（或读取失败），就间隔重读几次；
+     * 仍不一致时照常返回最后一次读回 —— 那才是系统的真实状态。
+     */
+    private suspend fun readBackAfterApply(
+        subId: Int,
+        requested: Map<Feature, FeatureValue>,
+        resolvedCountryIso: String?,
+    ): Map<Feature, FeatureValue>? {
+        var readback = loadCurrentConfiguration(subId)
+        // 应用到全部 SIM（subId < 0）时没有单卡可读回，也就无从等待。
+        if (subId < 0 ||
+            !ApplyReadbackRules.hasVerifiableTarget(requested, resolvedCountryIso, Build.VERSION.SDK_INT)
+        ) {
+            return readback
         }
-        if ((requested[Feature.FIVE_G_NR]?.data as? Boolean) == true) {
-            val requestedMode =
-                NrMode.fromStorageKey(requested[Feature.NR_MODE]?.data as? String) ?: NrMode.DEFAULT
-            val actualMode = NrMode.fromStorageKey(readback[Feature.NR_MODE]?.data as? String)
-            verifiable++
-            if (actualMode != requestedMode) return false
+        var retries = 0
+        while (
+            retries < READBACK_RETRY_COUNT &&
+            (readback == null || !readbackConfirms(readback, requested, resolvedCountryIso))
+        ) {
+            delay(READBACK_RETRY_DELAY_MS)
+            readback = loadCurrentConfiguration(subId) ?: readback
+            retries++
         }
-        if (!resolvedCountryIso.isNullOrBlank()) {
-            verifiable++
-            val actualIso = (readback[Feature.COUNTRY_ISO]?.data as? String).orEmpty()
-            if (!actualIso.equals(resolvedCountryIso, ignoreCase = true)) return false
+        if (retries > 0) {
+            Log.i(TAG, "readback for subId=$subId re-read $retries time(s) after apply")
         }
-        // 没有任何可校验项时不能凭空判定成功。
-        return verifiable > 0
+        return readback
     }
 
     /**
