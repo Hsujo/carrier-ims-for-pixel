@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,9 @@ class MonitorService : Service() {
      * 放在独立协程里执行，采样循环照常按加密节奏继续，劣化期间不会停摆。
      */
     private var captureJob: Job? = null
+
+    /** 唯一的采样循环；重复的启动请求不能再起第二个循环。 */
+    private var loopJob: Job? = null
 
     /**
      * 当前生效的 CarrierConfig 指纹。
@@ -109,11 +113,21 @@ class MonitorService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        targetSubId = intent.getIntExtra(EXTRA_SUB_ID, -1)
+        val subId = intent.getIntExtra(EXTRA_SUB_ID, -1)
+        // 同一张卡的重复启动（例如连点两次）沿用正在运行的循环，不再另起一个。
+        val sameTargetRunning = loopJob?.isActive == true && subId == targetSubId
+        targetSubId = subId
         startForeground(NOTIFICATION_ID, buildNotification("正在监测 subId=$targetSubId"))
         _running.value = true
-        refreshConfigTag()
-        scope.launch { runLoop() }
+        if (!sameTargetRunning) {
+            refreshConfigTag()
+            // 换卡时先等旧循环完全停下再起新循环，避免两个循环交替探测、交错写同一条时间线。
+            val previousLoop = loopJob
+            loopJob = scope.launch {
+                previousLoop?.cancelAndJoin()
+                runLoop()
+            }
+        }
         // 进程被系统回收后重启时，START_STICKY 会以 null intent 回调，目标 subId 随之丢失；
         // START_REDELIVER_INTENT 会重投原始 intent，重启后仍监测同一张卡。
         return START_REDELIVER_INTENT

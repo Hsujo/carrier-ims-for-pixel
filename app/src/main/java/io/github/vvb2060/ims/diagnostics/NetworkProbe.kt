@@ -245,10 +245,12 @@ object NetworkProbe {
         // 否则 netd 会以 EPERM 拒绝绑定（枚举得到的 Network 不等于可用）。
         val cm = context.getSystemService(ConnectivityManager::class.java)
         var callback: ConnectivityManager.NetworkCallback? = null
+        var bySpecificRequest = false
         try {
             val requested = if (cm != null) {
-                val (network, cb) = requestCellularNetwork(cm, targetSubId, profile)
+                val (network, cb, specific) = requestCellularNetwork(cm, targetSubId, profile)
                 callback = cb
+                bySpecificRequest = specific
                 network
             } else {
                 null
@@ -261,6 +263,10 @@ object NetworkProbe {
                 if (requested != null) kotlin.Result.success(requested) else lookup,
             )
             val probedSubId = cellular?.let { subIdOf(cm, it) }
+            // 指定了目标卡却没能用精确请求拿到网络，所得网络又读不出归属（系统可能隐藏 specifier）：
+            // 无法证明测的是目标卡，双卡时它很可能是默认数据卡，不能按目标卡下结论。
+            val targetUnverified = targetSubId != null && targetSubId >= 0 &&
+                cellular != null && !bySpecificRequest && probedSubId == null
             // 两类探测互不依赖，并行执行以缩短现场等待时间。
             val triple = coroutineScope {
                 val ip = async { probeIpReachability(cellular, profile) }
@@ -274,7 +280,9 @@ object NetworkProbe {
                 ipReachability = ipProbe,
                 dnsResolution = dnsProbe,
                 latency = latency,
-                verdict = buildVerdict(link, ipProbe, dnsProbe, latency, targetSubId, probedSubId),
+                verdict = buildVerdict(
+                    link, ipProbe, dnsProbe, latency, targetSubId, probedSubId, targetUnverified,
+                ),
                 targetSubId = targetSubId,
                 probedSubId = probedSubId,
             )
@@ -299,7 +307,7 @@ object NetworkProbe {
         cm: ConnectivityManager,
         targetSubId: Int?,
         profile: Profile = Profile.FULL,
-    ): Pair<Network?, ConnectivityManager.NetworkCallback?> {
+    ): RequestedNetwork {
         if (targetSubId != null && targetSubId >= 0) {
             val specific = runCatching {
                 NetworkRequest.Builder()
@@ -312,7 +320,9 @@ object NetworkProbe {
             }.getOrNull()
             if (specific != null) {
                 val result = awaitNetwork(cm, specific, profile.requestNetworkTimeoutMillis)
-                if (result.first != null) return result
+                if (result.first != null) {
+                    return RequestedNetwork(result.first, result.second, bySpecificRequest = true)
+                }
                 result.second?.let { runCatching { cm.unregisterNetworkCallback(it) } }
                 Log.i(TAG, "specific request for subId=$targetSubId unavailable, falling back")
             }
@@ -321,8 +331,21 @@ object NetworkProbe {
             .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        return awaitNetwork(cm, generic, profile.requestNetworkTimeoutMillis)
+        val (network, cb) = awaitNetwork(cm, generic, profile.requestNetworkTimeoutMillis)
+        return RequestedNetwork(network, cb, bySpecificRequest = false)
     }
+
+    /**
+     * [requestCellularNetwork] 的结果。
+     *
+     * @param bySpecificRequest 是否由带目标 subId 的精确请求得到；退回通用请求时为 false，
+     *        此时所得网络未必属于目标卡。
+     */
+    private data class RequestedNetwork(
+        val network: Network?,
+        val callback: ConnectivityManager.NetworkCallback?,
+        val bySpecificRequest: Boolean,
+    )
 
     private suspend fun awaitNetwork(
         cm: ConnectivityManager,
@@ -567,13 +590,19 @@ object NetworkProbe {
 
         repeat(profile.latencySamples) {
             // 预算用尽即停：已采到的样本照常保留，样本少也好过采样周期失控。
-            if (elapsed() >= profile.latencyBudgetMillis) return@repeat
+            val remaining = profile.latencyBudgetMillis - elapsed()
+            if (remaining <= 0) return@repeat
+            // 单次超时不下调，但也不能越过剩余预算：否则一次超时之后还会再起一个完整超时，
+            // 监测剖面的实际耗时可达预算的 1.5 倍，拖垮异常期间的加密采样节奏。
+            val timeout = minOf(profile.latencyTimeoutMillis.toLong(), remaining).toInt()
             val started = System.nanoTime()
             val failure = connectFailure(
-                network, address, IP_PORTS.first(), profile.latencyTimeoutMillis
+                network, address, IP_PORTS.first(), timeout
             )
             when {
                 failure == null -> samples += (System.nanoTime() - started) / 1_000_000
+                // 被预算截短的超时只说明 RTT 超过了剩余预算，不是完整的下界观测，不计入样本。
+                failure is SocketTimeoutException && timeout < profile.latencyTimeoutMillis -> Unit
                 // 超时 = RTT 至少有这么大，这是观测不是缺失。
                 failure is SocketTimeoutException -> {
                     samples += profile.latencyTimeoutMillis.toLong()
@@ -629,11 +658,18 @@ object NetworkProbe {
         latency: LatencyResult?,
         targetSubId: Int?,
         probedSubId: Int?,
+        targetUnverified: Boolean,
     ): String = when {
         // 测到的不是目标卡时，任何结论都与被诊断的 SIM 无关。
         targetSubId != null && probedSubId != null && targetSubId != probedSubId ->
             "WRONG_SIM_PROBED: 实际测到的是 subId=$probedSubId 的网络，" +
                 "而目标是 subId=$targetSubId；本次结果不属于目标卡，请勿据此判断"
+
+        // 同理，无法证明测的是目标卡时也不能给出正常结论，否则会把另一张卡的结果当成目标卡的。
+        targetUnverified ->
+            "UNVERIFIED_SIM: 无法确认测到的是 subId=$targetSubId 的网络" +
+                "（精确申请失败，退回的网络读不出归属，双卡时很可能是默认数据卡）；" +
+                "本次结果可能不属于目标卡，请勿据此判断"
 
         // 读不到链路状态时不给任何网络结论：那是工具自身的问题，
         // 报成「没有蜂窝网络」会把排查引向完全错误的方向。

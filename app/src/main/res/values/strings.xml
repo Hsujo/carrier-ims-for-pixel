@@ -260,5 +260,6 @@
     <string name="monitor_stop_action">Stop monitoring</string>
     <string name="monitor_state">Samples %1$d · auto-captured %2$d</string>
     <string name="monitor_last_trigger">Last trigger: %s</string>
+    <string name="monitor_notification_denied">Notification permission denied: monitoring still runs, but its status and Stop button will not appear in the notification shade. Come back to this page to stop it.</string>
     <string name="monitor_bounded">Ring buffer capped at %d samples (~16h at the normal rate); the oldest are dropped, storage never grows without bound.</string>
 </resources>

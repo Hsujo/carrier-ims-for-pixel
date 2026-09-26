@@ -260,5 +260,6 @@
     <string name="monitor_stop_action">停止监测</string>
     <string name="monitor_state">样本 %1$d 条 · 自动捕获 %2$d 次</string>
     <string name="monitor_last_trigger">最近触发：%s</string>
+    <string name="monitor_notification_denied">未授予通知权限：监测仍会运行，但通知栏不会显示监测状态和停止按钮，请回到本页停止。</string>
     <string name="monitor_bounded">环形缓冲上限 %d 条（常态节奏约 16 小时），超出即丢弃最旧样本，存储不会无限增长。</string>
 </resources>

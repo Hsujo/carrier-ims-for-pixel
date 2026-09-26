@@ -1,8 +1,12 @@
 package io.github.vvb2060.ims.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.diagnostics.MonitorLog
@@ -269,6 +274,17 @@ class DiagnosticsActivity : BaseActivity() {
         val captures by MonitorService.autoCaptures.collectAsStateWithLifecycle()
         val trigger by MonitorService.lastTrigger.collectAsStateWithLifecycle()
 
+        // Android 13+ 的通知权限要在运行时申请。被拒绝时监测照常运行，
+        // 但通知栏不会显示监测状态和停止按钮，因此明确提示只能回到本页停止。
+        val notificationPermission = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (!granted) {
+                Toast.makeText(context, R.string.monitor_notification_denied, Toast.LENGTH_LONG).show()
+            }
+            MonitorService.start(context, subId)
+        }
+
         LaunchedEffect(captures) { if (captures > 0) onChanged() }
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -302,7 +318,15 @@ class DiagnosticsActivity : BaseActivity() {
                         if (running) {
                             MonitorService.stop(context)
                         } else if (subId >= 0) {
-                            MonitorService.start(context, subId)
+                            val granted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.POST_NOTIFICATIONS,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) {
+                                MonitorService.start(context, subId)
+                            } else {
+                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
                         } else {
                             Toast.makeText(context, R.string.select_single_sim, Toast.LENGTH_SHORT).show()
                         }
