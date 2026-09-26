@@ -98,6 +98,7 @@
     <string name="nr_mode_actual">实际：%s</string>
     <string name="nr_mode_mismatch">请求 %1$s，但运营商配置读回 %2$s</string>
     <string name="nr_mode_requires_single_sim">请先选择单张 SIM 卡再修改 NR 模式。</string>
+    <string name="nr_array_unreadable">读取当前 NR 数组失败。为避免覆盖其中无法识别的取值，本次未写入，请重试。</string>
     <string name="_5g_thresholds">5G信号强度调整</string>
     <string name="_5g_thresholds_desc">5G信号强度调整为匹配中国大陆阈值</string>
     <string name="_5g_plus_icon">5GA/5G+ 图标显示</string>

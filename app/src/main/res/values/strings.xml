@@ -98,6 +98,7 @@
     <string name="nr_mode_actual">Actual: %s</string>
     <string name="nr_mode_mismatch">Requested %1$s but carrier config reports %2$s</string>
     <string name="nr_mode_requires_single_sim">Select a single SIM to change NR mode.</string>
+    <string name="nr_array_unreadable">Could not read the current NR availability array, so nothing was written to avoid overwriting values this app does not recognize. Please try again.</string>
     <string name="_5g_thresholds">5G Signal Strength Adjust</string>
     <string name="_5g_thresholds_desc">Adjust 5G signal strength to match China mainland thresholds</string>
     <string name="_5g_plus_icon">5GA/5G+ Icon</string>

@@ -896,8 +896,9 @@ class MainActivity : BaseActivity() {
                                 val mapToDump = buildCompleteFeatureMap(featureSwitches)
                                 val resolvedCountryIso = viewModel.resolveCountryIsoOverridePreview(sim, mapToDump)
                                 // 与 apply 一致：5G 开着且数组含无法识别的取值时，预览同样原样保留该数组。
+                                // 读不到时预览退回默认模式；真正写入时会放弃，不会改写。
                                 val nrAvailabilitiesOverride =
-                                    viewModel.resolveNrAvailabilitiesPassthrough(sim, mapToDump)
+                                    viewModel.resolveNrAvailabilitiesPassthrough(sim, mapToDump).getOrNull()
                                 val bundleForApply = ImsModifier.buildBundle(
                                     carrierName = null,
                                     countryISO = resolvedCountryIso,

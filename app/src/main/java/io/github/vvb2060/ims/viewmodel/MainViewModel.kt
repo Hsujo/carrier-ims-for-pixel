@@ -456,7 +456,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // 读回值可能是空串（UNKNOWN），此时沿用默认模式，不擅自改变用户当前配置。
         val nrMode = NrMode.fromStorageKey(map[Feature.NR_MODE]?.data as? String) ?: NrMode.DEFAULT
         // 但 5G 开着、系统数组又含无法识别的取值时，原样写回该数组，见 resolveNrAvailabilitiesPassthrough。
-        val nrAvailabilitiesOverride = resolveNrAvailabilitiesPassthrough(selectedSim, map)
+        val nrAvailabilitiesOverride = resolveNrAvailabilitiesPassthrough(selectedSim, map).getOrElse {
+            // 该原样保留的数组读不到：放弃本次写入，不能把无法识别的取值改写成默认模式。
+            return ApplyResult(status = ApplyStatus.FAILED, message = it.message, readback = null)
+        }
 
         val bundle = ImsModifier.buildBundle(
             carrierName,
@@ -706,30 +709,45 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     /**
-     * 本次写入要原样保留的 NR 数组；返回 null 时按 NR 模式写入。
+     * 本次写入要原样保留的 NR 数组；成功值为 null 时按 NR 模式写入。
      *
      * 5G 开着、NR 模式却读不出（系统数组含无法识别的取值，读回为空串）时，返回系统当前的
      * 原始数组。否则改动任何无关开关，都会把厂商或新平台的取值改写成默认的 [1,2]。
      * 当前数组里没有 NSA/SA 说明 5G 原本是关的，这次是开启操作，照常按默认模式写入。
+     * 需要原样保留、却读不到当前数组时返回失败：调用方应放弃本次写入，而不是改写成默认模式。
      */
     suspend fun resolveNrAvailabilitiesPassthrough(
         selectedSim: SimSelection,
         map: Map<Feature, FeatureValue>,
-    ): IntArray? {
-        if (selectedSim.subId < 0) return null
+    ): Result<IntArray?> {
+        if (selectedSim.subId < 0) return Result.success(null)
         // 与 onApplyConfiguration 的取值方式一致：缺省视为开启。
         val enable5GNR = map[Feature.FIVE_G_NR]?.data as? Boolean ?: true
-        if (!enable5GNR) return null
+        if (!enable5GNR) return Result.success(null)
         // 模式已知（读回可识别，或用户在单选组里选定），就按该模式写。
-        if (NrMode.fromStorageKey(map[Feature.NR_MODE]?.data as? String) != null) return null
-        val current = readNrAvailabilities(selectedSim.subId)
-        if (current == null) {
-            Log.w(TAG, "NR array unreadable for subId=${selectedSim.subId}; falling back to default mode")
-            return null
+        if (NrMode.fromStorageKey(map[Feature.NR_MODE]?.data as? String) != null) {
+            return Result.success(null)
         }
-        val hasNr = current.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA) ||
-            current.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA)
-        return current.takeIf { hasNr }
+        // 直接读 Bundle 而不走 readNrAvailabilities：要区分「读取失败」与「没有这个键」。
+        val bundle = ShizukuProvider.readCarrierConfig(
+            application,
+            selectedSim.subId,
+            arrayOf(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY),
+        )
+        if (bundle == null) {
+            Log.w(TAG, "NR array unreadable for subId=${selectedSim.subId}; refusing to overwrite it")
+            return Result.failure(IllegalStateException(application.getString(R.string.nr_array_unreadable)))
+        }
+        val current = bundle.getIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY)
+        Log.i(
+            TAG,
+            "NR array before apply: subId=${selectedSim.subId} value=${NrMode.formatAvailabilities(current)}"
+        )
+        val hasNr = current != null && (
+            current.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA) ||
+                current.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA)
+            )
+        return Result.success(current.takeIf { hasNr })
     }
 
     suspend fun readImsRegistrationStatus(subId: Int): Boolean? {
