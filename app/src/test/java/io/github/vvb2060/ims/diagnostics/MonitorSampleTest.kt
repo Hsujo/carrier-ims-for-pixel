@@ -1,6 +1,7 @@
 package io.github.vvb2060.ims.diagnostics
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,6 +102,12 @@ class MonitorSampleTest {
         }
         // 真正测到目标卡却不通时照常触发。
         assertEquals("probe_failed", AnomalyRule.reasonFor(sample().copy(probeOk = false), null))
+        // 根本没有蜂窝网络（数据完全中断）不是「测到了另一张卡」，必须触发抓取。
+        val noCellular = sample(note = "NO_CELLULAR_NETWORK").copy(
+            validated = "", ipv4 = "", rttMs = null, jitterMs = null, probeOk = false,
+        )
+        assertFalse(noCellular.probedOtherSim)
+        assertEquals("probe_failed", AnomalyRule.reasonFor(noCellular, previous = sample()))
     }
 
     @Test

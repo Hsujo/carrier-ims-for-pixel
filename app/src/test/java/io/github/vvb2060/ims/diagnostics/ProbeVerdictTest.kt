@@ -42,4 +42,49 @@ class ProbeVerdictTest {
         assertFalse(okProbe.skipped)
         assertTrue(okProbe.ok)
     }
+
+    private fun result(
+        onCellular: Boolean,
+        targetSubId: Int? = 1,
+        probedSubId: Int? = 1,
+        targetUnverified: Boolean = false,
+    ) = NetworkProbe.Result(
+        link = NetworkProbe.LinkSnapshot(
+            unreadable = false,
+            hasCellularNetwork = onCellular,
+            validated = null,
+            interfaceName = null,
+            ipv4 = emptyList(),
+            ipv6 = emptyList(),
+            hasDefaultRouteV4 = false,
+            hasDefaultRouteV6 = false,
+            routes = emptyList(),
+            dnsServers = emptyList(),
+            capabilities = null,
+            subId = probedSubId,
+            hasInternetCapability = onCellular,
+            error = null,
+        ),
+        ipReachability = probe(attempts = 2, successes = 2),
+        dnsResolution = probe(attempts = 0, successes = 0),
+        latency = null,
+        verdict = "",
+        targetSubId = targetSubId,
+        probedSubId = probedSubId,
+        targetUnverified = targetUnverified,
+        onCellular = onCellular,
+    )
+
+    @Test
+    fun `a probe that never got a cellular network does not measure the target`() {
+        // 蜂窝数据完全中断时探测走的是默认路由（常是 Wi-Fi），通了也不能记在目标卡名下。
+        assertFalse(result(onCellular = false, probedSubId = null).measuresTarget)
+        assertTrue(result(onCellular = true).measuresTarget)
+    }
+
+    @Test
+    fun `a probe on another or unproven sim does not measure the target`() {
+        assertFalse(result(onCellular = true, probedSubId = 2).measuresTarget)
+        assertFalse(result(onCellular = true, probedSubId = null, targetUnverified = true).measuresTarget)
+    }
 }

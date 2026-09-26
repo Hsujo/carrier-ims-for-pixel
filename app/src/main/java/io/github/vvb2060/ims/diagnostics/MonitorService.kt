@@ -237,6 +237,8 @@ class MonitorService : Service() {
         // 测到的不是目标卡（或无法证明是）时，链路指标不属于目标卡：置空，只在 note 里留下判定。
         // 否则会把另一张卡的健康状态记在目标卡名下，还会压掉目标卡本该触发的异常抓取。
         // RAT 与信号按目标卡单独读取，不受影响。
+        // 根本没拿到蜂窝网络时同样置空、probe_ok 记为 false：探测走的是默认路由（常是 Wi-Fi），
+        // 而蜂窝数据完全中断正是要抓的故障，不能被 Wi-Fi 的正常结果压掉。
         val measured = probe.measuresTarget
         return MonitorSample(
             atMillis = System.currentTimeMillis(),

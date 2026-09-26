@@ -226,13 +226,20 @@ object NetworkProbe {
         val probedSubId: Int?,
         /** 指定了目标卡，但无法证明被探测的网络属于它（见 run 中的判定）。 */
         val targetUnverified: Boolean = false,
+        /** 探测是否绑在蜂窝网络上。没拿到蜂窝网络时探测走的是默认路由（常是 Wi-Fi）。 */
+        val onCellular: Boolean,
     ) {
         val subIdMismatch: Boolean
             get() = targetSubId != null && probedSubId != null && targetSubId != probedSubId
 
-        /** 本次探测数据能否算作目标卡的测量结果。 */
+        /**
+         * 本次探测数据能否算作目标卡的测量结果。
+         *
+         * 没绑到蜂窝网络时，时延与连通性测的是默认路由，与任何一张卡都无关：
+         * 蜂窝数据完全中断时 Wi-Fi 照样畅通，不能拿它把目标卡记成健康。
+         */
         val measuresTarget: Boolean
-            get() = !subIdMismatch && !targetUnverified
+            get() = onCellular && !subIdMismatch && !targetUnverified
     }
 
     /**
@@ -296,6 +303,7 @@ object NetworkProbe {
                 targetSubId = targetSubId,
                 probedSubId = probedSubId,
                 targetUnverified = targetUnverified,
+                onCellular = cellular != null,
             )
         } finally {
             callback?.let { runCatching { cm?.unregisterNetworkCallback(it) } }

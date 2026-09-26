@@ -19,6 +19,12 @@ object SnapshotStore {
     /** 每种类型最多保留的快照数，超出后删除最旧的。 */
     private const val MAX_PER_KIND = 10
 
+    /** 写入中的快照目录前缀；不以任何 [SnapshotKind.prefix] 开头，[list] 不会列出它。 */
+    private const val STAGING_PREFIX = ".staging_"
+
+    /** 一次采集最多几十秒，超过一小时仍在的临时目录只可能是残留。 */
+    private const val STALE_STAGING_MILLIS = 60 * 60 * 1000L
+
     data class StoredSnapshot(
         val name: String,
         val kind: SnapshotKind,
@@ -37,7 +43,12 @@ object SnapshotStore {
     suspend fun write(context: Context, snapshot: Snapshot): Result<StoredSnapshot> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val dir = File(rootDir(context), snapshot.name)
+                val root = rootDir(context)
+                pruneStaleStaging(root)
+                // 先写进 list() 看不到的临时目录，全部写完再改名发布：
+                // 导出可能与写入同时进行，否则会把只写了一半的快照打进包里。
+                val dir = File(root, "$STAGING_PREFIX${snapshot.name}")
+                dir.deleteRecursively()
                 dir.mkdirs()
 
                 File(dir, "metadata.txt").writeText(buildMetadataText(snapshot))
@@ -56,8 +67,15 @@ object SnapshotStore {
                     File(dir, "summary.txt").writeText(SnapshotSummary.from(snapshot).toText())
                 }.onFailure { Log.w(TAG, "failed to write summary.txt", it) }
 
+                // 同一文件系统内的目录改名是原子的：导出要么看不到它，要么看到完整的一份。
+                val published = File(root, snapshot.name)
+                if (!dir.renameTo(published)) {
+                    dir.deleteRecursively()
+                    error("failed to publish snapshot ${snapshot.name}")
+                }
+
                 cleanupOldSnapshots(context, snapshot.kind)
-                StoredSnapshot(snapshot.name, snapshot.kind, dir, snapshot.takenAtMillis)
+                StoredSnapshot(snapshot.name, snapshot.kind, published, snapshot.takenAtMillis)
             }
         }
 
@@ -73,6 +91,19 @@ object SnapshotStore {
     fun delete(snapshot: StoredSnapshot): Boolean = runCatching {
         snapshot.directory.deleteRecursively()
     }.getOrDefault(false)
+
+    /**
+     * 清掉进程中途被杀时残留的临时目录。只删足够旧的：另一次采集可能正在写它自己的临时目录。
+     */
+    private fun pruneStaleStaging(root: File) {
+        val cutoff = System.currentTimeMillis() - STALE_STAGING_MILLIS
+        root.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith(STAGING_PREFIX) && it.lastModified() < cutoff }
+            ?.forEach {
+                Log.i(TAG, "removing stale staging dir ${it.name}")
+                it.deleteRecursively()
+            }
+    }
 
     private fun cleanupOldSnapshots(context: Context, kind: SnapshotKind) {
         val sameKind = list(context).filter { it.kind == kind }
