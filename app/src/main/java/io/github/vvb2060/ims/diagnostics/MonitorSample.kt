@@ -40,6 +40,13 @@ data class MonitorSample(
      */
     val subId: Int? = null,
 ) {
+    /**
+     * 这条样本的探测没测到目标卡（或无法证明测到了），链路指标已置空。
+     * 它说明的是「测不到目标卡」，不是目标卡的链路故障。
+     */
+    val probedOtherSim: Boolean
+        get() = note == NetworkProbe.VERDICT_WRONG_SIM || note == NetworkProbe.VERDICT_UNVERIFIED_SIM
+
     fun toCsvRow(): String = listOf(
         atMillis.toString(),
         rat,
@@ -106,6 +113,8 @@ object AnomalyRule {
     const val RTT_TRIGGER_MS = 3_000L
 
     fun reasonFor(sample: MonitorSample, previous: MonitorSample?): String? {
+        // 没测到目标卡时既不算「通」也不算「不通」，不能当作目标卡的故障去抓快照。
+        if (sample.probedOtherSim) return null
         if (!sample.probeOk) return "probe_failed"
         sample.jitterMs?.let { if (it >= JITTER_TRIGGER_MS) return "jitter_${it}ms" }
         sample.rttMs?.let { if (it >= RTT_TRIGGER_MS) return "rtt_${it}ms" }

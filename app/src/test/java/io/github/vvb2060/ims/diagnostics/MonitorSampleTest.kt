@@ -91,6 +91,19 @@ class MonitorSampleTest {
     }
 
     @Test
+    fun `a sample that did not measure the target SIM never triggers a capture`() {
+        listOf(NetworkProbe.VERDICT_WRONG_SIM, NetworkProbe.VERDICT_UNVERIFIED_SIM).forEach { verdict ->
+            val otherSim = sample(note = verdict).copy(
+                validated = "", ipv4 = "", rttMs = null, jitterMs = null, probeOk = false,
+            )
+            assertTrue(otherSim.probedOtherSim)
+            assertNull(AnomalyRule.reasonFor(otherSim, previous = sample()))
+        }
+        // 真正测到目标卡却不通时照常触发。
+        assertEquals("probe_failed", AnomalyRule.reasonFor(sample().copy(probeOk = false), null))
+    }
+
+    @Test
     fun `malformed rows are skipped instead of misaligned`() {
         assertNull(MonitorSample.fromCsvRow(""))
         assertNull(MonitorSample.fromCsvRow(MonitorSample.CSV_HEADER))

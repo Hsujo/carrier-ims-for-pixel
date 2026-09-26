@@ -211,6 +211,10 @@ object NetworkProbe {
 
     private const val UNKNOWN_TEXT = "UNKNOWN"
 
+    /** 测到的不是目标卡 / 无法证明测的是目标卡时的判定前缀；监测时间线的 note 列据此识别。 */
+    const val VERDICT_WRONG_SIM = "WRONG_SIM_PROBED"
+    const val VERDICT_UNVERIFIED_SIM = "UNVERIFIED_SIM"
+
     data class Result(
         val link: LinkSnapshot,
         val ipReachability: ProbeResult,
@@ -220,9 +224,15 @@ object NetworkProbe {
         /** 目标 subId 与实际被探测网络的 subId，不一致时结论不属于目标卡。 */
         val targetSubId: Int?,
         val probedSubId: Int?,
+        /** 指定了目标卡，但无法证明被探测的网络属于它（见 run 中的判定）。 */
+        val targetUnverified: Boolean = false,
     ) {
         val subIdMismatch: Boolean
             get() = targetSubId != null && probedSubId != null && targetSubId != probedSubId
+
+        /** 本次探测数据能否算作目标卡的测量结果。 */
+        val measuresTarget: Boolean
+            get() = !subIdMismatch && !targetUnverified
     }
 
     /**
@@ -285,6 +295,7 @@ object NetworkProbe {
                 ),
                 targetSubId = targetSubId,
                 probedSubId = probedSubId,
+                targetUnverified = targetUnverified,
             )
         } finally {
             callback?.let { runCatching { cm?.unregisterNetworkCallback(it) } }
@@ -662,12 +673,12 @@ object NetworkProbe {
     ): String = when {
         // 测到的不是目标卡时，任何结论都与被诊断的 SIM 无关。
         targetSubId != null && probedSubId != null && targetSubId != probedSubId ->
-            "WRONG_SIM_PROBED: 实际测到的是 subId=$probedSubId 的网络，" +
+            "$VERDICT_WRONG_SIM: 实际测到的是 subId=$probedSubId 的网络，" +
                 "而目标是 subId=$targetSubId；本次结果不属于目标卡，请勿据此判断"
 
         // 同理，无法证明测的是目标卡时也不能给出正常结论，否则会把另一张卡的结果当成目标卡的。
         targetUnverified ->
-            "UNVERIFIED_SIM: 无法确认测到的是 subId=$targetSubId 的网络" +
+            "$VERDICT_UNVERIFIED_SIM: 无法确认测到的是 subId=$targetSubId 的网络" +
                 "（精确申请失败，退回的网络读不出归属，双卡时很可能是默认数据卡）；" +
                 "本次结果可能不属于目标卡，请勿据此判断"
 

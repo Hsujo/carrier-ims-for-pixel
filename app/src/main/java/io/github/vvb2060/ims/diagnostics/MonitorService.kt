@@ -16,12 +16,14 @@ import android.util.Log
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.ShizukuProvider
 import io.github.vvb2060.ims.ui.DiagnosticsActivity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +45,9 @@ class MonitorService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var log: MonitorLog
+
+    // 由采样协程在旧循环停下后切换，主线程也会读取
+    @Volatile
     private var targetSubId: Int = -1
 
     /**
@@ -116,15 +121,17 @@ class MonitorService : Service() {
         val subId = intent.getIntExtra(EXTRA_SUB_ID, -1)
         // 同一张卡的重复启动（例如连点两次）沿用正在运行的循环，不再另起一个。
         val sameTargetRunning = loopJob?.isActive == true && subId == targetSubId
-        targetSubId = subId
-        startForeground(NOTIFICATION_ID, buildNotification("正在监测 subId=$targetSubId"))
+        startForeground(NOTIFICATION_ID, buildNotification("正在监测 subId=$subId", subId))
         _running.value = true
         if (!sameTargetRunning) {
-            refreshConfigTag()
             // 换卡时先等旧循环完全停下再起新循环，避免两个循环交替探测、交错写同一条时间线。
+            // 目标卡也要等旧循环停下之后才切换：否则旧循环里正在进行的探测，
+            // 会和新卡的 RAT、信号、subId 拼成同一条样本。
             val previousLoop = loopJob
             loopJob = scope.launch {
                 previousLoop?.cancelAndJoin()
+                targetSubId = subId
+                refreshConfigTag()
                 runLoop()
             }
         }
@@ -137,9 +144,13 @@ class MonitorService : Service() {
         var previous: MonitorSample? = null
         var lastCaptureAt = 0L
         var fastRemaining = 0
-        while (scope.isActive) {
+        // 循环可能被单独取消（换卡），因此看本协程自己的状态，而不是整个服务作用域。
+        while (currentCoroutineContext().isActive) {
             val startedAt = System.currentTimeMillis()
             val sample = runCatching { takeSample() }.getOrElse {
+                // 取消（停止监测或换卡）必须照常向上抛出，不能记成一条采样失败，
+                // 否则会凭空多出一条 probe_failed 并触发一次多余的快照。
+                if (it is CancellationException) throw it
                 Log.w(TAG, "sample failed", it)
                 MonitorSample(
                     atMillis = System.currentTimeMillis(),
@@ -162,7 +173,9 @@ class MonitorService : Service() {
             ) {
                 lastCaptureAt = now
                 _lastTrigger.value = reason
-                captureJob = scope.launch { captureOnAnomaly(reason) }
+                // 目标卡在发起时就固定下来：快照耗时较长，期间可能已经换卡。
+                val captureSubId = targetSubId
+                captureJob = scope.launch { captureOnAnomaly(reason, captureSubId) }
             }
             previous = sample
             _sampleCount.value = log.size()
@@ -200,14 +213,18 @@ class MonitorService : Service() {
         )
         val rat = readRat()
         val signal = readSignal()
+        // 测到的不是目标卡（或无法证明是）时，链路指标不属于目标卡：置空，只在 note 里留下判定。
+        // 否则会把另一张卡的健康状态记在目标卡名下，还会压掉目标卡本该触发的异常抓取。
+        // RAT 与信号按目标卡单独读取，不受影响。
+        val measured = probe.measuresTarget
         return MonitorSample(
             atMillis = System.currentTimeMillis(),
             rat = rat,
-            validated = probe.link.validated?.toString().orEmpty(),
-            ipv4 = probe.link.ipv4.firstOrNull().orEmpty(),
-            rttMs = probe.latency?.avgMs,
-            jitterMs = probe.latency?.jitterMs,
-            probeOk = probe.ipReachability.ok,
+            validated = if (measured) probe.link.validated?.toString().orEmpty() else "",
+            ipv4 = if (measured) probe.link.ipv4.firstOrNull().orEmpty() else "",
+            rttMs = if (measured) probe.latency?.avgMs else null,
+            jitterMs = if (measured) probe.latency?.jitterMs else null,
+            probeOk = measured && probe.ipReachability.ok,
             rsrp = signal?.first,
             sinr = signal?.second,
             thermal = readThermal(),
@@ -278,10 +295,10 @@ class MonitorService : Service() {
         }
     }.getOrDefault("")
 
-    private suspend fun captureOnAnomaly(reason: String) {
+    private suspend fun captureOnAnomaly(reason: String, subId: Int) {
         val sim = runCatching { ShizukuProvider.readSimInfoList(this) }
             .getOrDefault(emptyList())
-            .firstOrNull { it.subId == targetSubId }
+            .firstOrNull { it.subId == subId }
         val snapshot = runCatching {
             SnapshotCollector.collect(this, SnapshotKind.BAD, sim)
         }.getOrNull() ?: return
@@ -300,11 +317,11 @@ class MonitorService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildNotification(text: String, subId: Int = targetSubId): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
-            DiagnosticsActivity.intent(this, targetSubId),
+            DiagnosticsActivity.intent(this, subId),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val stop = PendingIntent.getService(

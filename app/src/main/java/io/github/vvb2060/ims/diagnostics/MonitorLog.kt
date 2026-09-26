@@ -70,12 +70,21 @@ class MonitorLog(private val context: Context) {
     fun flush() {
         val rows = snapshotSamples()
         runCatching {
-            file().writeText(
-                buildString {
-                    appendLine(MonitorSample.CSV_HEADER)
-                    rows.forEach { appendLine(it.toCsvRow()) }
-                }
-            )
+            val target = file()
+            // 先写同目录的临时文件再原子替换：导出可能正在读这个文件，
+            // 原地截断重写会让导出包里出现空的或只写了一半的时间线。
+            val tmp = File.createTempFile(FILE_NAME, ".tmp", target.parentFile)
+            try {
+                tmp.writeText(
+                    buildString {
+                        appendLine(MonitorSample.CSV_HEADER)
+                        rows.forEach { appendLine(it.toCsvRow()) }
+                    }
+                )
+                check(tmp.renameTo(target)) { "failed to replace ${target.name}" }
+            } finally {
+                tmp.delete()
+            }
         }.onFailure { Log.w(TAG, "failed to flush monitor log", it) }
     }
 
