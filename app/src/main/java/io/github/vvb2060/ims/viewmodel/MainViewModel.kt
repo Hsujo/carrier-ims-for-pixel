@@ -490,7 +490,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             overrideResult.isSuccess -> ApplyStatus.APPLIED
 
             // instrumentation 报失败，但真实配置已体现目标值：以系统事实为准。
-            readback != null && readbackConfirms(readback, map, countryISO) -> {
+            // 仅限写入之后的权限委托清理失败，见 isDelegationCleanupFailure。
+            isDelegationCleanupFailure(overrideResult.errorMessage) &&
+                readback != null && readbackConfirms(readback, map, countryISO) -> {
                 Log.w(
                     TAG,
                     "apply reported failure but readback confirms the write for " +
@@ -534,6 +536,15 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             readback = readback,
         )
     }
+
+    /**
+     * 失败信息是否来自写入之后「清理权限委托」这一步。
+     *
+     * 只有这种失败发生在写入之后，读回才有资格纠正它。真正的写入失败时，读回只能说明
+     * 开启项原本就开着，证明不了本次写入生效，关闭操作尤其如此，不能据此报成功。
+     */
+    private fun isDelegationCleanupFailure(message: String?): Boolean =
+        message?.contains("stopDelegateShellPermissionIdentity") == true
 
     /**
      * 判断读回的 CarrierConfig 是否已经体现了本次写入的目标值。
