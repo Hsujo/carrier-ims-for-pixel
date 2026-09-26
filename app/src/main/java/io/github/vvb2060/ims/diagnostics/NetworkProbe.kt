@@ -82,6 +82,7 @@ object NetworkProbe {
         val ipTargetCount: Int,
         val ipPortCount: Int,
         val dnsEnabled: Boolean,
+        /** 申请蜂窝网络的等待预算，精确申请与退回的通用申请合计不超过它。 */
         val requestNetworkTimeoutMillis: Int,
     ) {
         /** 现场快照：证据优先。 */
@@ -321,12 +322,19 @@ object NetworkProbe {
      *
      * 优先带 TelephonyNetworkSpecifier 精确申请目标卡；系统不满足该请求时
      * 退回不带 specifier 的请求，此时可能拿到另一张卡，由调用方比对 subId 后提示。
+     *
+     * 两次申请共用 [Profile.requestNetworkTimeoutMillis] 这一份等待预算：精确申请超时后
+     * 若再给退回的申请一份完整超时，监测剖面光是拿网络就要 2 × 5 秒，蜂窝中断时
+     * 加密采样的节奏根本无从谈起。精确申请很快被拒时，退回的申请仍有剩余预算可用。
      */
     private suspend fun requestCellularNetwork(
         cm: ConnectivityManager,
         targetSubId: Int?,
         profile: Profile = Profile.FULL,
     ): RequestedNetwork {
+        val startedAt = System.nanoTime()
+        fun remainingMillis() =
+            profile.requestNetworkTimeoutMillis - (System.nanoTime() - startedAt) / 1_000_000
         if (targetSubId != null && targetSubId >= 0) {
             val specific = runCatching {
                 NetworkRequest.Builder()
@@ -346,11 +354,16 @@ object NetworkProbe {
                 Log.i(TAG, "specific request for subId=$targetSubId unavailable, falling back")
             }
         }
+        val remaining = remainingMillis()
+        if (remaining <= 0) {
+            Log.i(TAG, "network request budget used up, skipping the generic fallback")
+            return RequestedNetwork(null, null, bySpecificRequest = false)
+        }
         val generic = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        val (network, cb) = awaitNetwork(cm, generic, profile.requestNetworkTimeoutMillis)
+        val (network, cb) = awaitNetwork(cm, generic, remaining.toInt())
         return RequestedNetwork(network, cb, bySpecificRequest = false)
     }
 

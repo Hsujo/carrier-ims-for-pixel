@@ -77,6 +77,10 @@ class MonitorService : Service() {
      */
     private val configTagGeneration = AtomicInteger()
 
+    /** 信号读取失败只记一次日志：每次采样都记会刷屏，一次不记则时间线里的空值无从解释。 */
+    @Volatile
+    private var signalFailureLogged = false
+
     /**
      * CarrierConfig 变更广播。
      *
@@ -295,6 +299,11 @@ class MonitorService : Service() {
             return lte.rsrp to lte.rssnr.takeIf { it != Int.MAX_VALUE }
         }
         null
+    }.onFailure {
+        if (!signalFailureLogged) {
+            signalFailureLogged = true
+            Log.w(TAG, "signal strength unreadable for subId=$targetSubId; rsrp/sinr stay blank", it)
+        }
     }.getOrNull()
 
     /**

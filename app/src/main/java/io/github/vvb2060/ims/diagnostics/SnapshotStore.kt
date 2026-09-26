@@ -3,6 +3,8 @@ package io.github.vvb2060.ims.diagnostics
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -88,9 +90,20 @@ object SnapshotStore {
         }.sortedByDescending { it.takenAtMillis }
     }
 
-    fun delete(snapshot: StoredSnapshot): Boolean = runCatching {
-        snapshot.directory.deleteRecursively()
-    }.getOrDefault(false)
+    /**
+     * 删除快照（用户手动删、写入后按上限清理）与导出打包互斥：
+     * 导出正在读的快照若被删掉一半，ZIP 会缺文件却照样报成功。
+     */
+    private val removalLock = Mutex()
+
+    /** 在没有快照会被删除的前提下执行 [block]，供导出打包使用。 */
+    suspend fun <T> withoutRemovals(block: suspend () -> T): T = removalLock.withLock { block() }
+
+    suspend fun delete(snapshot: StoredSnapshot): Boolean = removalLock.withLock {
+        runCatching {
+            snapshot.directory.deleteRecursively()
+        }.getOrDefault(false)
+    }
 
     /**
      * 清掉进程中途被杀时残留的临时目录。只删足够旧的：另一次采集可能正在写它自己的临时目录。
@@ -105,7 +118,7 @@ object SnapshotStore {
             }
     }
 
-    private fun cleanupOldSnapshots(context: Context, kind: SnapshotKind) {
+    private suspend fun cleanupOldSnapshots(context: Context, kind: SnapshotKind) {
         val sameKind = list(context).filter { it.kind == kind }
         if (sameKind.size <= MAX_PER_KIND) return
         sameKind.drop(MAX_PER_KIND).forEach {

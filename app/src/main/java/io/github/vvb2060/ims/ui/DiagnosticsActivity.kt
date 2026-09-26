@@ -428,6 +428,8 @@ class DiagnosticsActivity : BaseActivity() {
                         }
                         OutlinedButton(
                             onClick = { onDelete(snapshot) },
+                            // 导出打包期间的删除会等到打包结束才执行，按钮先禁用，免得看起来没反应。
+                            enabled = !exporting,
                             modifier = Modifier.height(36.dp),
                         ) {
                             Text(stringResource(R.string.diagnostics_delete), fontSize = 12.sp)

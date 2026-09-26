@@ -39,6 +39,11 @@ object DiagnosticsExporter {
      * @param mccMnc 用于文件名，便于区分不同运营商的采样。
      */
     suspend fun export(context: Context, mccMnc: String?): Result<Export> =
+        // 从列出快照到打包完成，期间不允许删除任何快照（手动删除与写入后的清理都算），
+        // 否则 ZIP 会缺文件，却照样把那份快照算进数量里报成功。
+        SnapshotStore.withoutRemovals { exportUnguarded(context, mccMnc) }
+
+    private suspend fun exportUnguarded(context: Context, mccMnc: String?): Result<Export> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val snapshots = SnapshotStore.list(context)
