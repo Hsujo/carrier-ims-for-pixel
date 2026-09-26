@@ -66,6 +66,9 @@ class ImsModifier : BackgroundInstrumentation() {
             enableShow4GForLTE: Boolean,
             // 不给默认值：漏传会静默写出与实际不符的数组，必须由调用方显式决定。
             nrMode: NrMode,
+            // 非 null 时原样写入这个数组而不是 nrMode 对应的数组：
+            // 用于保留系统里含无法识别取值的 NR 数组，避免被改写成默认模式。
+            nrAvailabilitiesOverride: IntArray? = null,
         ): Bundle {
             val bundle = Bundle()
             // 运营商名称
@@ -145,7 +148,7 @@ class ImsModifier : BackgroundInstrumentation() {
             if (enable5GNR) {
                 bundle.putIntArray(
                     CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY,
-                    nrMode.toAvailabilities()
+                    nrAvailabilitiesOverride ?: nrMode.toAvailabilities()
                 )
                 if (enable5GPlusIcon) {
                     // 5GA / 5G+ 图标判定逻辑：

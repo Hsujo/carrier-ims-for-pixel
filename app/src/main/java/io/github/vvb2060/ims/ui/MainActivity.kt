@@ -766,7 +766,7 @@ class MainActivity : BaseActivity() {
                 if (selectedTab == MainTab.IMS && shizukuStatus == ShizukuStatus.READY) {
                     SimCardSelectionCard(selectedSim, allSimList, onSelectSim = {
                         selectedSim = it
-                    }, onRefreshSimList = refreshSimListAction)
+                    }, onRefreshSimList = refreshSimListAction, enabled = !applyingConfiguration)
                     FeaturesCard(
                         isSelectAllSim = selectedSim?.subId == -1,
                         allSimList = allSimList,
@@ -895,6 +895,9 @@ class MainActivity : BaseActivity() {
                             scope.launch {
                                 val mapToDump = buildCompleteFeatureMap(featureSwitches)
                                 val resolvedCountryIso = viewModel.resolveCountryIsoOverridePreview(sim, mapToDump)
+                                // 与 apply 一致：5G 开着且数组含无法识别的取值时，预览同样原样保留该数组。
+                                val nrAvailabilitiesOverride =
+                                    viewModel.resolveNrAvailabilitiesPassthrough(sim, mapToDump)
                                 val bundleForApply = ImsModifier.buildBundle(
                                     carrierName = null,
                                     countryISO = resolvedCountryIso,
@@ -911,6 +914,7 @@ class MainActivity : BaseActivity() {
                                     nrMode = NrMode.fromStorageKey(
                                         mapToDump[Feature.NR_MODE]?.data as? String
                                     ) ?: NrMode.DEFAULT,
+                                    nrAvailabilitiesOverride = nrAvailabilitiesOverride,
                                 )
                                 val snapshotText = buildEditableConfigSnapshotText(
                                     selectedSim = sim,
@@ -1398,6 +1402,7 @@ private fun ExtraToolsPage(
         allSimList = allSimList,
         onSelectSim = onSelectSim,
         onRefreshSimList = onRefreshSimList,
+        enabled = !applyingNrMode,
     )
     Spacer(modifier = Modifier.height(16.dp))
     RegionCompatibilityCard(
@@ -2273,6 +2278,9 @@ fun SimCardSelectionCard(
     allSimList: List<SimSelection>,
     onSelectSim: (SimSelection) -> Unit,
     onRefreshSimList: () -> Unit,
+    // 写入进行中不允许换卡：写入结束后的读回与回滚都作用在「当前选中卡」的界面状态上，
+    // 中途换卡会把旧卡的结果套到新卡上，下一次完整写入就会用旧卡的配置覆盖新卡。
+    enabled: Boolean = true,
 ) {
     Card(
         modifier = Modifier
@@ -2305,12 +2313,14 @@ fun SimCardSelectionCard(
                                 .heightIn(min = 36.dp)
                                 .selectable(
                                     selected = (selectedSim == sim),
+                                    enabled = enabled,
                                     onClick = { onSelectSim(sim) }),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
                                 modifier = Modifier.size(20.dp),
                                 selected = (selectedSim == sim),
+                                enabled = enabled,
                                 onClick = { onSelectSim(sim) })
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(sim.showTitle)

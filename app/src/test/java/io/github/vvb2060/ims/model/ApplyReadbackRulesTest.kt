@@ -83,6 +83,24 @@ class ApplyReadbackRulesTest {
     }
 
     @Test
+    fun unknownRequestedNrModeIsNotComparedAgainstTheDefault() {
+        // 系统数组含无法识别的取值时读回的模式为空串，写入会原样保留该数组，
+        // 不能拿默认模式 [1,2] 去比，否则每次写入都会白等重读。
+        val requested = allOff().apply {
+            put(Feature.FIVE_G_NR, on())
+            put(Feature.NR_MODE, text(""))
+        }
+        val readback = allOff().apply {
+            put(Feature.FIVE_G_NR, on())
+            put(Feature.NR_MODE, text(""))
+        }
+        assertTrue(ApplyReadbackRules.hasVerifiableTarget(requested, null, api34))
+        assertTrue(ApplyReadbackRules.confirms(readback, requested, null, api34))
+        // 5G 开关本身仍然校验。
+        assertFalse(ApplyReadbackRules.confirms(allOff(), requested, null, api34))
+    }
+
+    @Test
     fun countryIsoIsComparedIgnoringCase() {
         val requested = allOff()
         val readback = allOff().apply { put(Feature.COUNTRY_ISO, text("CN")) }

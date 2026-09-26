@@ -455,6 +455,8 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val enableShow4GForLTE = (map[Feature.SHOW_4G_FOR_LTE]?.data ?: false) as Boolean
         // 读回值可能是空串（UNKNOWN），此时沿用默认模式，不擅自改变用户当前配置。
         val nrMode = NrMode.fromStorageKey(map[Feature.NR_MODE]?.data as? String) ?: NrMode.DEFAULT
+        // 但 5G 开着、系统数组又含无法识别的取值时，原样写回该数组，见 resolveNrAvailabilitiesPassthrough。
+        val nrAvailabilitiesOverride = resolveNrAvailabilitiesPassthrough(selectedSim, map)
 
         val bundle = ImsModifier.buildBundle(
             carrierName,
@@ -470,6 +472,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             enable5GPlusIcon,
             enableShow4GForLTE,
             nrMode,
+            nrAvailabilitiesOverride,
         )
         bundle.putInt(ImsModifier.BUNDLE_SELECT_SIM_ID, selectedSim.subId)
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
@@ -696,6 +699,33 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // 明确记录读到的值：只有写入侧有日志时，无法判断某个时刻系统里到底是什么。
         Log.i(TAG, "readNrAvailabilities: subId=$subId value=${NrMode.formatAvailabilities(values)}")
         return values
+    }
+
+    /**
+     * 本次写入要原样保留的 NR 数组；返回 null 时按 NR 模式写入。
+     *
+     * 5G 开着、NR 模式却读不出（系统数组含无法识别的取值，读回为空串）时，返回系统当前的
+     * 原始数组。否则改动任何无关开关，都会把厂商或新平台的取值改写成默认的 [1,2]。
+     * 当前数组里没有 NSA/SA 说明 5G 原本是关的，这次是开启操作，照常按默认模式写入。
+     */
+    suspend fun resolveNrAvailabilitiesPassthrough(
+        selectedSim: SimSelection,
+        map: Map<Feature, FeatureValue>,
+    ): IntArray? {
+        if (selectedSim.subId < 0) return null
+        // 与 onApplyConfiguration 的取值方式一致：缺省视为开启。
+        val enable5GNR = map[Feature.FIVE_G_NR]?.data as? Boolean ?: true
+        if (!enable5GNR) return null
+        // 模式已知（读回可识别，或用户在单选组里选定），就按该模式写。
+        if (NrMode.fromStorageKey(map[Feature.NR_MODE]?.data as? String) != null) return null
+        val current = readNrAvailabilities(selectedSim.subId)
+        if (current == null) {
+            Log.w(TAG, "NR array unreadable for subId=${selectedSim.subId}; falling back to default mode")
+            return null
+        }
+        val hasNr = current.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA) ||
+            current.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA)
+        return current.takeIf { hasNr }
     }
 
     suspend fun readImsRegistrationStatus(subId: Int): Boolean? {

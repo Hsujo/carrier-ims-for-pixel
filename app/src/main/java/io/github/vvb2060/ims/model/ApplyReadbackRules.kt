@@ -79,8 +79,11 @@ object ApplyReadbackRules {
         return target.data as? Boolean ?: false
     }
 
+    // 请求里的模式读不出（空串）时，写入的是系统原数组或默认模式，无从比对具体模式；
+    // 此时只由 FIVE_G_NR 开关本身校验 5G 是否开着。
     private fun isNrModeVerifiable(requested: Map<Feature, FeatureValue>): Boolean =
-        isEnabled(requested, Feature.FIVE_G_NR)
+        isEnabled(requested, Feature.FIVE_G_NR) &&
+            NrMode.fromStorageKey(requested[Feature.NR_MODE]?.data as? String) != null
 
     // 国家码 override 同样只在 Android 14+ 写入。
     private fun isIsoVerifiable(resolvedCountryIso: String?, sdkInt: Int): Boolean =
