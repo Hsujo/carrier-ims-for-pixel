@@ -30,20 +30,6 @@ val debugApplicationIdSuffix: String =
         .orElse("")
         .get()
 
-fun buildConfigString(value: String): String {
-    val escaped = value
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-    return "\"$escaped\""
-}
-
-fun configuredString(propertyName: String, environmentName: String, defaultValue: String = ""): String {
-    return providers.gradleProperty(propertyName)
-        .orElse(providers.environmentVariable(environmentName))
-        .orElse(defaultValue)
-        .get()
-}
-
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
@@ -63,60 +49,6 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = gitVersionCode
         versionName = appVersionName
-        buildConfigField(
-            "String",
-            "AD_API_BASE_URL",
-            buildConfigString(
-                configuredString(
-                    "turboims.adApiBaseUrl",
-                    "TURBOIMS_AD_API_BASE_URL",
-                    "https://leads.3jiezhiwai.com"
-                )
-            )
-        )
-        buildConfigField(
-            "String",
-            "DODOPAY_SUPPORT_URL_TEMPLATE",
-            buildConfigString(configuredString("turboims.dodopaySupportUrlTemplate", "TURBOIMS_DODOPAY_SUPPORT_URL_TEMPLATE"))
-        )
-        buildConfigField(
-            "String",
-            "DODOPAY_SUPPORT_FEED_URL",
-            buildConfigString(configuredString("turboims.dodopaySupportFeedUrl", "TURBOIMS_DODOPAY_SUPPORT_FEED_URL"))
-        )
-        buildConfigField(
-            "String",
-            "BUSINESS_INTENT_BASE_URL",
-            buildConfigString(
-                configuredString(
-                    "turboims.businessIntentBaseUrl",
-                    "TURBOIMS_BUSINESS_INTENT_BASE_URL",
-                    "https://leads.3jiezhiwai.com"
-                )
-            )
-        )
-        buildConfigField(
-            "String",
-            "BUSINESS_CONTACT_TEXT",
-            buildConfigString(
-                configuredString(
-                    "turboims.businessContactText",
-                    "TURBOIMS_BUSINESS_CONTACT_TEXT",
-                    "合作联系：GitHub Issue"
-                )
-            )
-        )
-        buildConfigField(
-            "String",
-            "BUSINESS_CONTACT_URL",
-            buildConfigString(
-                configuredString(
-                    "turboims.businessContactUrl",
-                    "TURBOIMS_BUSINESS_CONTACT_URL",
-                    "https://github.com/ryfineZ/carrier-ims-for-pixel/issues/new"
-                )
-            )
-        )
         ndk {
             abiFilters.add("arm64-v8a")
         }
@@ -139,6 +71,8 @@ android {
             if (debugApplicationIdSuffix.isNotBlank()) {
                 applicationIdSuffix = debugApplicationIdSuffix
             }
+            // 侧载开发版：跳过开机自动恢复等会影响系统真实配置的自动行为。
+            buildConfigField("boolean", "SIDE_BY_SIDE_DEV_BUILD", debugApplicationIdSuffix.isNotBlank().toString())
             signingConfig = signingConfigs.getByName("sign")
         }
         release {
@@ -148,7 +82,17 @@ android {
             vcsInfo.include = false
             proguardFiles("proguard-rules.pro")
             versionNameSuffix = ".r$gitVersionCode.$gitVersionName"
+            buildConfigField("boolean", "SIDE_BY_SIDE_DEV_BUILD", "false")
             signingConfig = signingConfigs.getByName("sign")
+        }
+    }
+    sourceSets {
+        // 仅当 debug 构建改写了 applicationId 时才叠加这份资源覆盖，
+        // 让侧载开发版在桌面上与官方包一眼可分。
+        if (debugApplicationIdSuffix.isNotBlank()) {
+            getByName("debug") {
+                res.srcDir("src/debugSuffixed/res")
+            }
         }
     }
     compileOptions {
@@ -192,7 +136,6 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.ktx)
 
     testImplementation(kotlin("test"))
-    testImplementation(libs.org.json)
 }
 
 apply(from = rootProject.file("signing.gradle"))

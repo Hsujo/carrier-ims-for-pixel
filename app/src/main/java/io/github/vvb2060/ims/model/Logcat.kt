@@ -53,7 +53,7 @@ data class LogEntry(
             }
 
             if (content.isEmpty())
-                return LogEntry(time = Date().toString(), content = line)
+                return LogEntry(time = Date().toString(), content = line, raw = line)
 
             return LogEntry(
                 level = level,

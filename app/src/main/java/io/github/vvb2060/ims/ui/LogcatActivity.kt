@@ -9,6 +9,7 @@ import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FloatingToolbarDefaults.floatingToolbarVerticalNestedScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,10 @@ class LogcatActivity : BaseActivity() {
     override fun Content() {
         val logs = viewModel.logs
         var filter by remember { mutableStateOf(LogLevel.DEBUG) }
+        // 仅在日志列表或过滤级别变化时重新过滤，而不是每次重组都全量 filter
+        val filteredLogs by remember {
+            derivedStateOf { logs.filter { it.level.isLevelEnabled(filter) } }
+        }
         var expanded by rememberSaveable { mutableStateOf(true) }
         var filterMenuExpanded by remember { mutableStateOf(false) }
 
@@ -59,9 +64,10 @@ class LogcatActivity : BaseActivity() {
                         onExport = { viewModel.exportLogFile() },
                         onFilterClick = { filterMenuExpanded = true },
                         onScrollDown = {
-                            if (logs.isNotEmpty()) {
+                            if (filteredLogs.isNotEmpty()) {
                                 scope.launch {
-                                    listState.animateScrollToItem(logs.lastIndex)
+                                    // 列表首项是状态栏占位，最后一条日志的下标等于过滤后的条数
+                                    listState.animateScrollToItem(filteredLogs.size)
                                 }
                             }
                         }
@@ -71,9 +77,7 @@ class LogcatActivity : BaseActivity() {
                 LogList(
                     listState = listState,
                     innerPadding = innerPadding,
-                    logs = logs.filter {
-                        it.level.isLevelEnabled(filter)
-                    },
+                    logs = filteredLogs,
                 )
             }
         }

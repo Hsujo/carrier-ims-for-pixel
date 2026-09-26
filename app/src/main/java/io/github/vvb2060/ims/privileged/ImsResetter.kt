@@ -2,7 +2,6 @@ package io.github.vvb2060.ims.privileged
 
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.Context
 import android.os.Bundle
 import android.os.ServiceManager
@@ -14,7 +13,7 @@ import com.android.internal.telephony.ISub
 import com.android.internal.telephony.ITelephony
 import rikka.shizuku.ShizukuBinderWrapper
 
-class ImsResetter : Instrumentation() {
+class ImsResetter : BackgroundInstrumentation() {
     companion object {
         private const val TAG = "ImsResetter"
         const val BUNDLE_SELECT_SIM_ID = "select_sim_id"
@@ -22,15 +21,14 @@ class ImsResetter : Instrumentation() {
         const val BUNDLE_RESULT_MSG = "result_msg"
     }
 
-    override fun onCreate(arguments: Bundle?) {
-        super.onCreate(arguments)
+    override fun execute(arguments: Bundle?) {
         if (arguments == null) {
             finish(Activity.RESULT_CANCELED, Bundle())
             return
         }
 
         val result = Bundle()
-        if (!waitForShizukuBinderReady()) {
+        if (!isShizukuBinderReady()) {
             result.putBoolean(BUNDLE_RESULT, false)
             result.putString(BUNDLE_RESULT_MSG, "shizuku binder is not ready")
             finish(Activity.RESULT_OK, result)

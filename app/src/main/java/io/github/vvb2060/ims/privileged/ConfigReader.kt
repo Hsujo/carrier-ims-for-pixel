@@ -3,7 +3,6 @@ package io.github.vvb2060.ims.privileged
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.Context
 import android.os.Bundle
 import android.os.PersistableBundle
@@ -13,7 +12,7 @@ import android.telephony.CarrierConfigManager
 import android.util.Log
 import rikka.shizuku.ShizukuBinderWrapper
 
-class ConfigReader : Instrumentation() {
+class ConfigReader : BackgroundInstrumentation() {
     companion object {
         private const val TAG = "ConfigReader"
         const val BUNDLE_SELECT_SIM_ID = "select_sim_id"
@@ -21,18 +20,21 @@ class ConfigReader : Instrumentation() {
         const val BUNDLE_DUMP = "dump"
         const val BUNDLE_RESULT = "result"
         const val BUNDLE_DUMP_TEXT = "dump_text"
+
+        // 同一次往返顺带读取 IMS 注册状态，减少选卡时的特权调用次数
+        const val BUNDLE_WITH_IMS_STATUS = "with_ims_status"
+        const val BUNDLE_IMS_REGISTERED = "ims_registered"
     }
 
     @SuppressLint("MissingPermission")
-    override fun onCreate(arguments: Bundle?) {
-        super.onCreate(arguments)
+    override fun execute(arguments: Bundle?) {
         if (arguments == null) {
             finish(Activity.RESULT_CANCELED, Bundle())
             return
         }
 
         val result = Bundle()
-        if (!waitForShizukuBinderReady()) {
+        if (!isShizukuBinderReady()) {
             finish(Activity.RESULT_OK, result)
             return
         }
@@ -56,6 +58,11 @@ class ConfigReader : Instrumentation() {
                     putValue(values, key, config.get(key))
                 }
                 result.putBundle(BUNDLE_RESULT, values)
+                if (arguments.getBoolean(BUNDLE_WITH_IMS_STATUS, false)) {
+                    runCatching { readImsRegistered(subId) }
+                        .onSuccess { result.putBoolean(BUNDLE_IMS_REGISTERED, it) }
+                        .onFailure { Log.w(TAG, "read ims status failed for subId=$subId", it) }
+                }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "read config failed", t)

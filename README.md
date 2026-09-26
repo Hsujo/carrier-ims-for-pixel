@@ -14,18 +14,19 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ryfineZ/carrier-ims-for-pixel/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ryfineZ/carrier-ims-for-pixel"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ryfineZ/carrier-ims-for-pixel"></a>
+  <a href="https://github.com/Hsujo/carrier-ims-for-pixel/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Hsujo/carrier-ims-for-pixel"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Hsujo/carrier-ims-for-pixel"></a>
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Android%2013%2B-3DDC84">
   <img alt="Device" src="https://img.shields.io/badge/Device-Pixel%20Tensor-blue">
   <img alt="Permission" src="https://img.shields.io/badge/Requires-Shizuku-orange">
 </p>
 
-## 仓库迁移说明
+## 分叉说明
 
-- 仓库已从 `ryfineZ/TurboIMS` 迁移为 `ryfineZ/carrier-ims-for-pixel`
-- 建议使用 `3.8.5` 及以上版本，应用内「检查更新 / 提 Issue / 打开仓库」已切换到新仓库
-- 旧版本若遇到更新或 Issue 跳转异常，请直接从新仓库 Releases 手动下载安装
+- 本仓库分叉自 [ryfineZ/carrier-ims-for-pixel](https://github.com/ryfineZ/carrier-ims-for-pixel)
+- 已移除原项目的广告弹窗、打赏 / 去广告、商务合作页面，只保留功能界面
+- 已移除应用内检查更新与下载安装，请到本仓库 [Releases](https://github.com/Hsujo/carrier-ims-for-pixel/releases) 获取新版本
+- 「提 Issue / 打开仓库」指向本仓库
 
 ## 项目定位
 
@@ -50,7 +51,6 @@
 | 网络修复 | 一键修复网络验证（captive portal） | 修复“已连接但网络受限/感叹号” |
 | TikTok 修复 | 修复 TikTok 无网络（大陆 SIM） | 仅大陆 SIM 提供该选项，海外 SIM 默认无需修复 |
 | 诊断工具 | 日志查看、配置全量查看、Issue 快捷上报 | 失败日志可直接附带到 Issue |
-| 应用维护 | 应用内检查更新与下载安装 | 直接对接仓库 Release |
 
 ## 为什么这个分支更适合日常使用
 
@@ -63,7 +63,7 @@
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/ryfineZ/carrier-ims-for-pixel/releases) 下载并安装 APK  
+1. 从 [Releases](https://github.com/Hsujo/carrier-ims-for-pixel/releases) 下载并安装 APK  
 2. 安装并启动 [Shizuku](https://shizuku.rikka.app/zh-hans/)  
 3. 打开 App，授权 Shizuku  
 4. 选择 SIM，按需开启功能开关  
@@ -90,6 +90,31 @@ SIGN_KEY_ALIAS=***
 SIGN_KEY_PASSWORD=***
 ```
 
+### 侧载开发版（GitHub Actions 自动构建）
+
+- 推送到 `claude/**` 分支、合并进 `master`，或在 Actions 页面手动运行 **Android Sideload Dev Build**，都会构建一个侧载开发版
+- 下载：Actions → Android Sideload Dev Build → 对应的运行 → Artifacts 里的 `TurboIMS-Hsujo-Dev`（压缩包内是 `TurboIMS-Hsujo-Dev-<提交号>.apk`）
+- 包名 `io.github.vvb2060.ims.mod.hsujo`，桌面名称「TurboIMS Hsujo Dev」，可与正式版同时安装；需要在 Shizuku 中单独授权
+- 开发版不会在开机后自动恢复配置，只执行你在界面上手动触发的写入，避免与正式版互相覆盖
+- 运行摘要和 `Report APK identity` 步骤会显示签名证书的 SHA256，可与本地密钥核对
+
+#### 固定开发密钥（可选，只需配置一次）
+
+不配置时，每次构建都用临时生成的 debug 密钥签名，签名各不相同，安装新版前必须先卸载旧的开发版。配置后各次构建签名一致，可以直接覆盖安装。这把密钥只用于开发版，与正式版签名无关；密码和别名固定为 `android` / `androiddebugkey`，工作流按这组值读取，不要修改。
+
+1. 生成密钥（需要 JDK 17+ 的 `keytool`，Android Studio 自带于安装目录的 `jbr/bin/`）：
+   ```bash
+   keytool -genkeypair -keystore sideload.jks -storetype PKCS12 -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=TurboIMS Hsujo Dev"
+   ```
+2. 转成单行 Base64：
+   - Linux：`base64 -w0 sideload.jks > sideload.b64`
+   - macOS：`base64 -i sideload.jks > sideload.b64`
+   - Windows PowerShell：`[Convert]::ToBase64String([IO.File]::ReadAllBytes("sideload.jks")) | Set-Content -NoNewline sideload.b64`
+3. 仓库 **Settings → Secrets and variables → Actions → New repository secret**：名称 `SIDELOAD_KEYSTORE_BASE64`，内容粘贴 `sideload.b64` 的全部文本（必须是 Actions 的 Repository secret）
+4. 妥善备份 `sideload.jks`，**不要提交到仓库**；添加完成后删除 `sideload.b64`。本地可用 `keytool -list -v -keystore sideload.jks -storepass android` 查看 SHA256 指纹，与 CI 输出核对
+
+secret 存在但内容无效（Base64 不完整、别名或密码不对）时，工作流会直接失败并提示原因，不会悄悄退回临时密钥。
+
 ## 常见问题
 
 ### 1. IMS 仍未注册
@@ -108,13 +133,7 @@ SIGN_KEY_PASSWORD=***
 - 仅大陆 SIM 才会出现“修复 TikTok 无网络”开关  
 - 变更后建议重启目标 App 或清理其会话缓存再测试
 
-### 4. 旧版本“检查更新 / 提 Issue”异常怎么办
-
-- 项目仓库已迁移为 `ryfineZ/carrier-ims-for-pixel`，旧仓库地址在部分客户端/网络环境下可能出现跳转或 API 兼容异常  
-- 建议升级到 `3.8.5` 及以上版本，新版已内置新仓库地址，并对旧地址增加更新接口回退兜底  
-- 如你仍使用旧版且无法更新，可直接从新仓库 Releases 页面手动下载安装包  
-
-### 5. 为什么去掉“修改国家码”，改为“一键修复 TikTok 登录”
+### 4. 为什么去掉“修改国家码”，改为“一键修复 TikTok 登录”
 
 - 旧方案里所谓“国家码修改”，本质是写入 CarrierConfig 覆盖项 `sim_country_iso_override_string`，并不是真正修改基带层的 MCC/MNC。  
 - 设备真实网络归属值（如 `gsm.operator.numeric`、注册态中的 MCC/MNC）通常不会被这类覆盖项直接改变，因此它不是稳定、通用的“改国家码”方案。  
@@ -125,10 +144,11 @@ SIGN_KEY_PASSWORD=***
 ## 更新记录
 
 - 详细版本变更见 [CHANGELOG.md](CHANGELOG.md)
-- 历史发布见 [Releases](https://github.com/ryfineZ/carrier-ims-for-pixel/releases)
+- 历史发布见 [Releases](https://github.com/Hsujo/carrier-ims-for-pixel/releases)
 
 ## 致谢
 
+- [ryfineZ/carrier-ims-for-pixel](https://github.com/ryfineZ/carrier-ims-for-pixel)
 - [Mystery00/TurboIMS](https://github.com/Mystery00/TurboIMS)
 - [vvb2060/Ims](https://github.com/vvb2060/Ims)
 - [kyujin-cho/pixel-volte-patch](https://github.com/kyujin-cho/pixel-volte-patch)

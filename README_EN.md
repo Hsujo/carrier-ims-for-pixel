@@ -14,18 +14,19 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ryfineZ/carrier-ims-for-pixel/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ryfineZ/carrier-ims-for-pixel"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ryfineZ/carrier-ims-for-pixel"></a>
+  <a href="https://github.com/Hsujo/carrier-ims-for-pixel/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Hsujo/carrier-ims-for-pixel"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Hsujo/carrier-ims-for-pixel"></a>
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Android%2013%2B-3DDC84">
   <img alt="Device" src="https://img.shields.io/badge/Device-Pixel%20Tensor-blue">
   <img alt="Permission" src="https://img.shields.io/badge/Requires-Shizuku-orange">
 </p>
 
-## Repository Migration Note
+## Fork Note
 
-- Repository has been renamed from `ryfineZ/TurboIMS` to `ryfineZ/carrier-ims-for-pixel`.
-- Use `3.8.5` or later. In-app actions (`Check Update / Submit Issue / Open Repo`) now point to the new repository.
-- If an old build fails to update or open issue links, install manually from the new Releases page.
+- This repository is a fork of [ryfineZ/carrier-ims-for-pixel](https://github.com/ryfineZ/carrier-ims-for-pixel).
+- The upstream ad popup, donation / ad-free unlock and business cooperation pages have been removed; only the functional screens remain.
+- The in-app update checker and installer have been removed. Get new builds from this repository's [Releases](https://github.com/Hsujo/carrier-ims-for-pixel/releases).
+- "Submit Issue / Open Repo" point to this repository.
 
 ## Positioning
 
@@ -54,11 +55,10 @@ Recent improvements include:
 | Network Fix | captive portal one-tap fix | fixes restricted/exclamation network states |
 | TikTok Fix | no-network fix for TikTok (Mainland SIM) | shown only for Mainland SIM |
 | Diagnostics | logs / full config view / issue shortcut | submit issues with useful context |
-| In-app Update | check, download, install updates | integrated with GitHub Releases |
 
 ## Quick Start
 
-1. Download APK from [Releases](https://github.com/ryfineZ/carrier-ims-for-pixel/releases)
+1. Download APK from [Releases](https://github.com/Hsujo/carrier-ims-for-pixel/releases)
 2. Install and start [Shizuku](https://shizuku.rikka.app/)
 3. Open app and grant Shizuku permission
 4. Select SIM and toggle required features
@@ -85,6 +85,28 @@ SIGN_KEY_ALIAS=***
 SIGN_KEY_PASSWORD=***
 ```
 
+### Sideload dev build (GitHub Actions)
+
+- Pushing to a `claude/**` branch, merging into `master`, or running **Android Sideload Dev Build** manually builds a sideload dev APK
+- Download it from Actions → Android Sideload Dev Build → the run → Artifacts → `TurboIMS-Hsujo-Dev`
+- Package `io.github.vvb2060.ims.mod.hsujo`, launcher name "TurboIMS Hsujo Dev"; it installs side by side with the regular app and needs its own Shizuku authorization
+- The dev build never restores saved config automatically after boot; it only writes what you trigger in the UI
+- The run summary and the `Report APK identity` step show the signing certificate SHA256
+
+#### Fixed dev signing key (optional, one-time)
+
+Without it, every run signs with a fresh debug key, so each new dev APK has a different signature and the previous dev build must be uninstalled first. With it, all runs share one signature and updates install in place. The key is for the dev build only and unrelated to release signing; the password and alias are fixed to `android` / `androiddebugkey`, do not change them.
+
+1. Generate the key (JDK 17+ `keytool`; Android Studio ships one under `jbr/bin/`):
+   ```bash
+   keytool -genkeypair -keystore sideload.jks -storetype PKCS12 -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=TurboIMS Hsujo Dev"
+   ```
+2. Encode it as single-line Base64: Linux `base64 -w0 sideload.jks > sideload.b64`; macOS `base64 -i sideload.jks > sideload.b64`; Windows PowerShell `[Convert]::ToBase64String([IO.File]::ReadAllBytes("sideload.jks")) | Set-Content -NoNewline sideload.b64`
+3. **Settings → Secrets and variables → Actions → New repository secret**, name `SIDELOAD_KEYSTORE_BASE64`, value = the whole content of `sideload.b64`
+4. Back up `sideload.jks` privately and **never commit it**; delete `sideload.b64` afterwards. `keytool -list -v -keystore sideload.jks -storepass android` shows the SHA256 fingerprint to compare with the CI output
+
+If the secret is present but invalid (truncated Base64, wrong alias or password), the workflow fails with the reason instead of silently falling back to a throwaway key.
+
 ## FAQ
 
 ### IMS not registered
@@ -103,12 +125,6 @@ SIGN_KEY_PASSWORD=***
 - TikTok fix switch only appears for Mainland SIM
 - restart target app or refresh its session after changes
 
-### "Check update / Submit issue" fails on old versions
-
-- The repository has been renamed to `ryfineZ/carrier-ims-for-pixel`; old links may fail in some clients or network conditions.
-- Upgrade to `3.8.5` or later. New versions use the new repository endpoints and include a legacy API fallback for update checks.
-- If in-app update fails on an old build, download and install APK manually from the new Releases page.
-
 ### Why "country code modification" was removed and replaced by "TikTok one-tap fix"
 
 - The old "country code" flow only wrote CarrierConfig override `sim_country_iso_override_string`; it did not truly modify baseband-level MCC/MNC.
@@ -120,10 +136,11 @@ SIGN_KEY_PASSWORD=***
 ## Changelog
 
 - Full changelog: [CHANGELOG.md](CHANGELOG.md)
-- Releases: [GitHub Releases](https://github.com/ryfineZ/carrier-ims-for-pixel/releases)
+- Releases: [GitHub Releases](https://github.com/Hsujo/carrier-ims-for-pixel/releases)
 
 ## Credits
 
+- [ryfineZ/carrier-ims-for-pixel](https://github.com/ryfineZ/carrier-ims-for-pixel)
 - [Mystery00/TurboIMS](https://github.com/Mystery00/TurboIMS)
 - [vvb2060/Ims](https://github.com/vvb2060/Ims)
 - [kyujin-cho/pixel-volte-patch](https://github.com/kyujin-cho/pixel-volte-patch)

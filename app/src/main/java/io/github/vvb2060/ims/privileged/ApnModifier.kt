@@ -2,7 +2,6 @@ package io.github.vvb2060.ims.privileged
 
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
@@ -13,7 +12,7 @@ import android.system.Os
 import android.util.Log
 import rikka.shizuku.ShizukuBinderWrapper
 
-class ApnModifier : Instrumentation() {
+class ApnModifier : BackgroundInstrumentation() {
     companion object {
         private const val TAG = "ApnModifier"
         private val APN_URI: Uri = Telephony.Carriers.CONTENT_URI
@@ -29,8 +28,7 @@ class ApnModifier : Instrumentation() {
         const val BUNDLE_RESULT_MSG = "result_msg"
     }
 
-    override fun onCreate(arguments: Bundle?) {
-        super.onCreate(arguments)
+    override fun execute(arguments: Bundle?) {
         val result = Bundle()
         if (arguments == null) {
             result.putBoolean(BUNDLE_RESULT, false)
@@ -38,7 +36,7 @@ class ApnModifier : Instrumentation() {
             finish(Activity.RESULT_OK, result)
             return
         }
-        if (!waitForShizukuBinderReady()) {
+        if (!isShizukuBinderReady()) {
             result.putBoolean(BUNDLE_RESULT, false)
             result.putString(BUNDLE_RESULT_MSG, "shizuku binder is not ready")
             finish(Activity.RESULT_OK, result)

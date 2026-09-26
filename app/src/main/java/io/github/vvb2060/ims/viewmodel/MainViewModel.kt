@@ -21,18 +21,13 @@ import io.github.vvb2060.ims.model.Feature
 import io.github.vvb2060.ims.model.FeatureConfigMapper
 import io.github.vvb2060.ims.model.FeatureValue
 import io.github.vvb2060.ims.model.FeatureValueType
-import io.github.vvb2060.ims.model.AdPlacement
 import io.github.vvb2060.ims.model.ApnDraftConfig
-import io.github.vvb2060.ims.model.BusinessIntentType
-import io.github.vvb2060.ims.model.CommercialAd
 import io.github.vvb2060.ims.model.ConfigBackupSnapshot
 import io.github.vvb2060.ims.model.NetworkExitStatus
 import io.github.vvb2060.ims.model.ShizukuStatus
 import io.github.vvb2060.ims.model.SimSelection
-import io.github.vvb2060.ims.model.SupportPaymentChannel
-import io.github.vvb2060.ims.model.SupportRecord
-import io.github.vvb2060.ims.model.SupportRules
 import io.github.vvb2060.ims.model.SystemInfo
+import io.github.vvb2060.ims.model.ToolRules
 import io.github.vvb2060.ims.privileged.ImsModifier
 import java.io.File
 import java.net.HttpURLConnection
@@ -43,6 +38,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
@@ -64,12 +62,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     companion object {
         private const val TAG = "MainViewModel"
         private const val RUNTIME_PREFS = "runtime_state"
-        private const val AD_PREFS = "ad_state"
+        private const val LEGACY_AD_PREFS = "ad_state"
+        private const val LEGACY_AD_FREE_PREF_KEY = "ad_free"
+        private const val LEGACY_SUPPORT_CLIENT_REF_PREF_KEY = "support_client_ref"
         private const val CONFIG_BACKUP_PREFS = "config_backups"
         private const val COUNTRY_MCC_PREF_KEY = "__country_mcc_override__"
         private const val TIKTOK_RANDOM_ISO_PREF_KEY = "__tiktok_random_iso__"
-        private const val SUPPORT_CLIENT_REF_PREF_KEY = "support_client_ref"
-        private const val AD_FREE_PREF_KEY = "ad_free"
         private const val KEY_LAST_BOOT_COUNT = "last_boot_count"
         private const val ISSUE_FAILURE_LOG_FILE = "issue_failure_logs.txt"
         private const val ISSUE_FAILURE_LOG_MAX_LINES = 200
@@ -78,9 +76,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         private const val IMS_REGISTER_RETRY_COUNT = 4
         private const val IMS_REGISTER_RETRY_DELAY_MS = 2_000L
         private const val NETWORK_EXIT_API_URL = "https://ipapi.co/json/"
-        private const val PROJECT_SOURCE_AD_SLOTS_PATH = "/api/sources/carrier-ims/ad-slots"
-        private const val PROJECT_PUBLIC_AD_SLOTS_PATH = "/api/project/public-ad-slots?project_id=carrier-ims"
-        private const val PROJECT_BUSINESS_INTENTS_PATH = "/api/sources/carrier-ims/intents"
         private val DEFAULT_CAPTIVE_PORTAL_TEST_URLS = listOf(
             "http://connectivitycheck.gstatic.cn/generate_204",
             "https://www.google.cn/generate_204",
@@ -100,6 +95,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val failed: Int,
     )
 
+    data class SimConfigState(
+        val features: Map<Feature, FeatureValue>?,
+        val imsRegistered: Boolean?,
+    )
+
     data class ImsRegisterResult(
         val registered: Boolean?,
         val backendErrorMessage: String?,
@@ -117,15 +117,15 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val httpsUrl: String,
     )
 
+    data class NetworkExitUiState(
+        val checking: Boolean = false,
+        val status: NetworkExitStatus? = null,
+        val error: String? = null,
+    )
+
     private var toast: Toast? = null
     private val runtimePrefs = application.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
-    private val adPrefs = application.getSharedPreferences(AD_PREFS, Context.MODE_PRIVATE)
     private val configBackupPrefs = application.getSharedPreferences(CONFIG_BACKUP_PREFS, Context.MODE_PRIVATE)
-    private val dodopaySupportUrlTemplate = BuildConfig.DODOPAY_SUPPORT_URL_TEMPLATE.trim().takeIf { it.isNotBlank() }
-    private val dodopaySupportFeedUrl = BuildConfig.DODOPAY_SUPPORT_FEED_URL.trim().takeIf { it.isNotBlank() }
-    private val dodopaySupportAppId = SupportRules.extractSupportAppId(dodopaySupportUrlTemplate.orEmpty())
-    private val adApiBaseUrl = SupportRules.normalizeBaseUrl(BuildConfig.AD_API_BASE_URL)
-    private val businessIntentBaseUrl = SupportRules.normalizeBaseUrl(BuildConfig.BUSINESS_INTENT_BASE_URL)
     private val issueFailureLogMutex = Mutex()
     private var pendingConfigRestoreAfterBoot = false
     private var restoringConfigAfterBoot = false
@@ -231,15 +231,31 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private val _issueFailureLogs = MutableStateFlow("")
     val issueFailureLogs: StateFlow<String> = _issueFailureLogs.asStateFlow()
 
+    // 网络验证（captive portal）状态，放在 ViewModel 中以免界面重建时重复探测
+    private val _captivePortalFixState = MutableStateFlow<CaptivePortalFixState?>(null)
+    val captivePortalFixState: StateFlow<CaptivePortalFixState?> = _captivePortalFixState.asStateFlow()
+    private val _checkingCaptivePortalStatus = MutableStateFlow(false)
+    val checkingCaptivePortalStatus: StateFlow<Boolean> = _checkingCaptivePortalStatus.asStateFlow()
+
+    // 网络出口检测结果
+    private val _networkExitState = MutableStateFlow(NetworkExitUiState())
+    val networkExitState: StateFlow<NetworkExitUiState> = _networkExitState.asStateFlow()
+
+    // 配置备份列表
+    private val _configBackups = MutableStateFlow<List<ConfigBackupSnapshot>>(emptyList())
+    val configBackups: StateFlow<List<ConfigBackupSnapshot>> = _configBackups.asStateFlow()
+
     // Shizuku Binder 接收监听器（服务连接/授权后触发）
     private val binderListener = Shizuku.OnBinderReceivedListener { updateShizukuStatus() }
     private val binderDeadListener = Shizuku.OnBinderDeadListener { updateShizukuStatus() }
 
     init {
+        clearLegacySupportState()
         pendingConfigRestoreAfterBoot = checkAndMarkBootChanged()
         loadSimList()
         loadSystemInfo()
         refreshIssueFailureLogs()
+        refreshConfigBackups()
         updateShizukuStatus()
         Shizuku.addBinderReceivedListener(binderListener)
         Shizuku.addBinderDeadListener(binderDeadListener)
@@ -268,6 +284,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 else -> ShizukuStatus.READY
             }
             _shizukuStatus.value = status
+            if (status == ShizukuStatus.READY && previousStatus != ShizukuStatus.READY) {
+                viewModelScope.launch { refreshCaptivePortalFixState() }
+            } else if (status != ShizukuStatus.READY) {
+                _captivePortalFixState.value = null
+            }
             if (
                 status == ShizukuStatus.READY &&
                 (
@@ -392,7 +413,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     suspend fun onApplyConfiguration(
         selectedSim: SimSelection,
         map: Map<Feature, FeatureValue>,
-        countryMccOverride: String? = null,
     ): String? {
         // 构建传递给底层 ImsModifier 的配置 Bundle
         val carrierName: String? = null
@@ -402,11 +422,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 selectedSim,
                 enableTikTokFix
             )
-        val countryMcc = countryMccOverride
-            ?.let { SupportRules.normalizeMcc(it) }
-            ?.takeIf { it.length == 3 }
-        val countryMnc =
-            if (selectedSim.subId == -1) null else selectedSim.mnc
         val enableVoLTE = (map[Feature.VOLTE]?.data ?: true) as Boolean
         val enableVoWiFi = (map[Feature.VOWIFI]?.data ?: true) as Boolean
         val enableVT = (map[Feature.VT]?.data ?: true) as Boolean
@@ -421,8 +436,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val bundle = ImsModifier.buildBundle(
             carrierName,
             countryISO,
-            countryMcc,
-            countryMnc,
             enableVoLTE,
             enableVoWiFi,
             enableVT,
@@ -436,12 +449,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         )
         bundle.putInt(ImsModifier.BUNDLE_SELECT_SIM_ID, selectedSim.subId)
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
+        bundle.putBoolean(ImsModifier.BUNDLE_REPLACE, true)
 
         // 调用 Shizuku 服务进行实际修改
         val resultMsg = ShizukuProvider.overrideImsConfig(application, bundle)
         if (resultMsg == null) {
             // 仅在应用成功后保存配置，避免本地状态与系统状态不一致
-            saveConfiguration(selectedSim.subId, map, countryMccOverride)
+            saveConfiguration(selectedSim.subId, map)
         }
         return resultMsg
     }
@@ -452,7 +466,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private fun saveConfiguration(
         subId: Int,
         map: Map<Feature, FeatureValue>,
-        countryMccOverride: String?,
     ) {
         val prefs = application.getSharedPreferences("sim_config_$subId", Context.MODE_PRIVATE)
         val keepTikTokRandomIso = prefs.getString(TIKTOK_RANDOM_ISO_PREF_KEY, null)
@@ -470,23 +483,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             } else {
                 remove(TIKTOK_RANDOM_ISO_PREF_KEY)
             }
-            val normalizedCountryMcc = countryMccOverride
-                ?.let { SupportRules.normalizeMcc(it) }
-                ?.takeIf { it.length == 3 }
-            if (normalizedCountryMcc != null) {
-                putString(COUNTRY_MCC_PREF_KEY, normalizedCountryMcc)
-            } else {
-                remove(COUNTRY_MCC_PREF_KEY)
-            }
         }
-    }
-
-    fun loadSavedCountryMccOverride(subId: Int): String {
-        if (subId < 0) return ""
-        return application
-            .getSharedPreferences("sim_config_$subId", Context.MODE_PRIVATE)
-            .getString(COUNTRY_MCC_PREF_KEY, "")
-            .orEmpty()
     }
 
     /**
@@ -518,14 +515,20 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         return map
     }
 
-    suspend fun loadCurrentConfiguration(subId: Int): Map<Feature, FeatureValue>? {
-        if (subId < 0) return null
-        val bundle = ShizukuProvider.readCarrierConfig(
+    /**
+     * 一次特权调用同时读取当前 CarrierConfig 功能状态与 IMS 注册状态。
+     */
+    suspend fun loadCurrentState(subId: Int): SimConfigState {
+        if (subId < 0) return SimConfigState(null, null)
+        val state = ShizukuProvider.readCarrierConfigWithImsStatus(
             application,
             subId,
             FeatureConfigMapper.readKeys
-        ) ?: return null
-        return FeatureConfigMapper.fromBundle(bundle)
+        )
+        return SimConfigState(
+            features = state.config?.let { FeatureConfigMapper.fromBundle(it) },
+            imsRegistered = state.imsRegistered,
+        )
     }
 
     suspend fun readImsRegistrationStatus(subId: Int): Boolean? {
@@ -602,204 +605,64 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         )
     }
 
-    fun isDodopaySupportConfigured(): Boolean = dodopaySupportUrlTemplate != null
+    /**
+     * 重新查询网络验证状态并更新 [captivePortalFixState]。
+     */
+    suspend fun refreshCaptivePortalFixState() {
+        _checkingCaptivePortalStatus.value = true
+        try {
+            _captivePortalFixState.value = queryCaptivePortalFixState()
+        } finally {
+            _checkingCaptivePortalStatus.value = false
+        }
+    }
 
-    fun isDodopaySupportFeedConfigured(): Boolean = dodopaySupportFeedUrl != null
-
-    fun isAdFreeEnabled(): Boolean = runtimePrefs.getBoolean(AD_FREE_PREF_KEY, false)
-
-    fun isAdServiceConfigured(): Boolean = adApiBaseUrl != null
-
-    fun isBusinessIntentConfigured(): Boolean = businessIntentBaseUrl != null
-
-    suspend fun checkNetworkExit(): Result<NetworkExitStatus> = withContext(Dispatchers.IO) {
-        runCatching {
-            val json = fetchJsonObject(NETWORK_EXIT_API_URL)
-            val ip = json.optString("ip")
-            val org = json.optString("org").ifBlank { json.optString("asn") }
-            val googleReachable = isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("Google"))
-            val tiktokReachable = isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("TikTok"))
-            val captiveReachable = isPortalUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("联网验证"))
-            NetworkExitStatus(
-                ip = ip.ifBlank { "N/A" },
-                ipVersion = if (ip.contains(":")) "IPv6" else "IPv4",
-                country = json.optString("country_name").ifBlank { json.optString("country") },
-                region = json.optString("region"),
-                city = json.optString("city"),
-                org = org.ifBlank { "N/A" },
-                risk = estimateIpRisk(org),
-                googleReachable = googleReachable,
-                tiktokReachable = tiktokReachable,
-                captivePortalReachable = captiveReachable,
+    fun refreshNetworkExit() {
+        if (_networkExitState.value.checking) return
+        _networkExitState.value = _networkExitState.value.copy(checking = true, error = null)
+        viewModelScope.launch {
+            val result = checkNetworkExit()
+            _networkExitState.value = NetworkExitUiState(
+                checking = false,
+                status = result.getOrNull(),
+                error = result.exceptionOrNull()?.message,
             )
         }
     }
 
-    suspend fun fetchCommercialAds(): Result<List<CommercialAd>> = withContext(Dispatchers.IO) {
+    private suspend fun checkNetworkExit(): Result<NetworkExitStatus> = withContext(Dispatchers.IO) {
         runCatching {
-            val baseUrl = adApiBaseUrl ?: return@runCatching emptyList()
-            val publicAds = runCatching {
-                val json = fetchJsonObject(baseUrl + PROJECT_SOURCE_AD_SLOTS_PATH)
-                SupportRules.parseCommercialAds(json)
-            }.getOrDefault(emptyList())
-            if (publicAds.isNotEmpty()) {
-                return@runCatching publicAds
+            // 出口 IP 查询与三项可达性探测并行执行，总耗时取决于最慢的一项而不是相加
+            coroutineScope {
+                val jsonResult = async { fetchJsonObject(NETWORK_EXIT_API_URL) }
+                val googleResult = async { isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("Google")) }
+                val tiktokResult = async { isGeneralUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("TikTok")) }
+                val captiveResult = async { isPortalUrlReachable(NETWORK_EXIT_SERVICE_URLS.getValue("联网验证")) }
+                val json = jsonResult.await()
+                val ip = json.optString("ip")
+                val org = json.optString("org").ifBlank { json.optString("asn") }
+                val googleReachable = googleResult.await()
+                val tiktokReachable = tiktokResult.await()
+                val captiveReachable = captiveResult.await()
+                NetworkExitStatus(
+                    ip = ip.ifBlank { "N/A" },
+                    ipVersion = if (ip.contains(":")) "IPv6" else "IPv4",
+                    country = json.optString("country_name").ifBlank { json.optString("country") },
+                    region = json.optString("region"),
+                    city = json.optString("city"),
+                    org = org.ifBlank { "N/A" },
+                    risk = estimateIpRisk(org),
+                    googleReachable = googleReachable,
+                    tiktokReachable = tiktokReachable,
+                    captivePortalReachable = captiveReachable,
+                )
             }
-            val compatiblePublicAds = runCatching {
-                SupportRules.parseCommercialAds(fetchJsonObject(baseUrl + PROJECT_PUBLIC_AD_SLOTS_PATH))
-            }.getOrDefault(emptyList())
-            compatiblePublicAds
-        }
-    }
-
-    suspend fun fetchSupportRecords(): Result<List<SupportRecord>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val url = dodopaySupportFeedUrl ?: return@runCatching emptyList()
-            SupportRules.parseSupportRecords(fetchJsonObject(url))
-        }
-    }
-
-    suspend fun verifyDodopayPaymentProof(paymentProof: String): Result<Boolean> = withContext(Dispatchers.IO) {
-        runCatching {
-            val verifyUrl = buildDodopayPaymentProofUrl(paymentProof)
-                ?: throw IllegalStateException("DoDoPay payment proof is not configured")
-            val verification = SupportRules.parsePaymentProofVerification(fetchJsonObject(verifyUrl))
-            val unlocked = SupportRules.isAdFreePaymentProof(
-                proof = verification,
-                expectedClientRef = getOrCreateSupportClientRef(),
-                expectedAppId = dodopaySupportAppId,
-            )
-            if (unlocked) {
-                runtimePrefs.edit { putBoolean(AD_FREE_PREF_KEY, true) }
-            }
-            unlocked
-        }
-    }
-
-    fun shouldShowHomeAd(ad: CommercialAd): Boolean {
-        val dismissedAt = when (val raw = adPrefs.all["dismissed_${ad.id}"]) {
-            is Long -> raw
-            is Boolean -> if (raw) adPrefs.getLong("shown_${ad.id}", 0L) else 0L
-            else -> 0L
-        }
-        val lastShown = adPrefs.getLong("shown_${ad.id}", 0L)
-        return SupportRules.shouldShowHomeAd(
-            ad = ad,
-            nowMillis = System.currentTimeMillis(),
-            lastShownAtMillis = lastShown,
-            dismissedAtMillis = dismissedAt,
-        )
-    }
-
-    fun markHomeAdShown(ad: CommercialAd) {
-        adPrefs.edit { putLong("shown_${ad.id}", System.currentTimeMillis()) }
-    }
-
-    fun dismissHomeAd(ad: CommercialAd) {
-        adPrefs.edit {
-            val now = System.currentTimeMillis()
-            putLong("dismissed_${ad.id}", now)
-            putLong("shown_${ad.id}", now)
-        }
-    }
-
-    fun buildDodopaySupportUrl(
-        name: String,
-        message: String,
-        amount: String,
-        channel: SupportPaymentChannel,
-    ): Result<String> = runCatching {
-        val template = dodopaySupportUrlTemplate
-            ?: throw IllegalStateException(application.getString(R.string.support_payment_not_configured))
-        val normalizedAmount = amount.trim()
-        val validAmount = SupportRules.normalizeSupportAmount(normalizedAmount)
-            ?: throw IllegalArgumentException(application.getString(R.string.support_amount_invalid))
-        SupportRules.buildUrlWithQueryParams(
-            template = template,
-            params = linkedMapOf(
-                "amount" to validAmount,
-                "payer_name" to name.trim().ifBlank { "匿名用户" },
-                "payer_message" to message.trim(),
-                "source" to "turboims_android",
-                "app_version" to BuildConfig.VERSION_NAME,
-                "title" to application.getString(R.string.support_payment_page_title),
-                "description" to application.getString(R.string.support_payment_page_desc),
-                "subject" to application.getString(R.string.support_payment_subject),
-                "button_text" to application.getString(R.string.support_payment_button),
-                "return_mode" to "close",
-                "return_label" to application.getString(R.string.support_payment_return_app),
-                "client_ref" to getOrCreateSupportClientRef(),
-                "proof_key" to SupportRules.AD_FREE_PROOF_KEY,
-                "channel" to channel.queryValue,
-                "auto_checkout" to "1",
-            ),
-            aliases = mapOf(
-                "name" to "payer_name",
-                "message" to "payer_message",
-            ),
-        )
-    }
-
-    private fun getOrCreateSupportClientRef(): String {
-        val existing = runtimePrefs.getString(SUPPORT_CLIENT_REF_PREF_KEY, "").orEmpty()
-        if (existing.isNotBlank()) return existing
-        val generated = "client_${UUID.randomUUID().toString().replace("-", "")}"
-        runtimePrefs.edit { putString(SUPPORT_CLIENT_REF_PREF_KEY, generated) }
-        return generated
-    }
-
-    private fun buildDodopayPaymentProofUrl(paymentProof: String): String? {
-        val origin = SupportRules.resolveUrlOrigin(dodopaySupportUrlTemplate.orEmpty()) ?: return null
-        return "$origin/api/public/payment-proofs/$paymentProof"
-    }
-
-    suspend fun cancelDodopaySupportOrder(orderId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val cancelUrl = SupportRules.buildDodopayPublicSupportCancelUrl(
-                supportUrlTemplate = dodopaySupportUrlTemplate.orEmpty(),
-                orderId = orderId,
-            ) ?: throw IllegalArgumentException("invalid DoDoPay order id")
-            postJsonObject(cancelUrl, JSONObject())
-            Unit
-        }
-    }
-
-    suspend fun submitBusinessIntent(
-        intentType: BusinessIntentType,
-        name: String,
-        contact: String,
-        message: String,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val baseUrl = businessIntentBaseUrl
-                ?: throw IllegalStateException(application.getString(R.string.business_intent_not_configured))
-            val normalizedContact = contact.trim()
-            val normalizedMessage = message.trim()
-            if (normalizedContact.isBlank()) {
-                throw IllegalArgumentException(application.getString(R.string.business_contact_required))
-            }
-            if (normalizedMessage.isBlank()) {
-                throw IllegalArgumentException(application.getString(R.string.business_message_required))
-            }
-            val payload = JSONObject()
-            SupportRules.buildBusinessIntentParams(
-                sourceName = "Carrier IMS",
-                sourceVersion = BuildConfig.VERSION_NAME,
-                intentType = intentType,
-                name = name,
-                contact = normalizedContact,
-                message = normalizedMessage,
-            ).forEach { (key, value) ->
-                payload.put(key, value)
-            }
-            postJsonObject(baseUrl + PROJECT_BUSINESS_INTENTS_PATH, payload)
-            Unit
         }
     }
 
     fun buildSuggestedApnConfig(selectedSim: SimSelection): ApnDraftConfig {
-        val mcc = SupportRules.normalizeMcc(selectedSim.mcc)
-        val mnc = SupportRules.normalizeMnc(selectedSim.mnc)
+        val mcc = ToolRules.normalizeMcc(selectedSim.mcc)
+        val mnc = ToolRules.normalizeMnc(selectedSim.mnc)
         val apn = when {
             mcc == "460" && mnc in setOf("00", "02", "04", "07", "08") -> "cmnet"
             mcc == "460" && mnc in setOf("01", "06", "09") -> "3gnet"
@@ -821,7 +684,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         config: ApnDraftConfig,
     ): String? {
         if (selectedSim.subId < 0) return "invalid subId"
-        SupportRules.validateApnDraft(config)?.let { return it }
+        ToolRules.validateApnDraft(config)?.let { return it }
         return ShizukuProvider.applyApnConfig(application, selectedSim.subId, config)
     }
 
@@ -829,7 +692,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         selectedSim: SimSelection,
         featureMap: Map<Feature, FeatureValue>,
         name: String,
-        countryMccOverride: String,
     ): ConfigBackupSnapshot {
         val snapshot = ConfigBackupSnapshot(
             id = UUID.randomUUID().toString(),
@@ -843,28 +705,33 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             featureValues = Feature.entries.associateWith { feature ->
                 featureMap[feature] ?: FeatureValue(feature.defaultValue, feature.valueType)
             },
-            countryMccOverride = SupportRules.normalizeMcc(countryMccOverride),
         )
         configBackupPrefs.edit {
             putString(snapshot.id, snapshot.toJson().toString())
         }
+        refreshConfigBackups()
         return snapshot
     }
 
-    fun loadConfigBackups(): List<ConfigBackupSnapshot> {
+    private fun loadConfigBackups(): List<ConfigBackupSnapshot> {
         return configBackupPrefs.all.values
             .mapNotNull { raw -> (raw as? String)?.let { parseConfigBackup(it) } }
             .sortedByDescending { it.createdAtMillis }
     }
 
+    private fun refreshConfigBackups() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _configBackups.value = loadConfigBackups()
+        }
+    }
+
     fun deleteConfigBackup(id: String) {
         configBackupPrefs.edit { remove(id) }
+        refreshConfigBackups()
     }
 
     private suspend fun isDefaultPortalCheckReachable(): Boolean {
-        return withContext(Dispatchers.IO) {
-            DEFAULT_CAPTIVE_PORTAL_TEST_URLS.any { url -> isPortalUrlReachable(url) }
-        }
+        return isAnyPortalUrlReachable(DEFAULT_CAPTIVE_PORTAL_TEST_URLS)
     }
 
     private suspend fun isPortalConfigReachable(httpUrl: String, httpsUrl: String): Boolean {
@@ -873,9 +740,14 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             if (httpsUrl.isNotBlank()) add(httpsUrl)
         }
         if (targets.isEmpty()) return false
-        return withContext(Dispatchers.IO) {
-            targets.any { url -> isPortalUrlReachable(url) }
-        }
+        return isAnyPortalUrlReachable(targets)
+    }
+
+    // 多个探测地址并行请求，最坏耗时为单次超时而不是逐个累加
+    private suspend fun isAnyPortalUrlReachable(urls: List<String>): Boolean = coroutineScope {
+        urls.map { url -> async(Dispatchers.IO) { isPortalUrlReachable(url) } }
+            .awaitAll()
+            .any { it }
     }
 
     private fun isPortalUrlReachable(url: String): Boolean {
@@ -943,30 +815,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         }
     }
 
-    private fun postJsonObject(url: String, payload: JSONObject): JSONObject {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = NETWORK_EXIT_CHECK_TIMEOUT_MS
-            readTimeout = NETWORK_EXIT_CHECK_TIMEOUT_MS
-            requestMethod = "POST"
-            doOutput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("User-Agent", "CarrierIMS/${BuildConfig.VERSION_NAME}")
-        }
-        try {
-            connection.outputStream.use { output ->
-                output.write(payload.toString().toByteArray(Charsets.UTF_8))
-            }
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("HTTP $responseCode")
-            }
-            return JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-        } finally {
-            connection.disconnect()
-        }
-    }
-
     private fun ConfigBackupSnapshot.toJson(): JSONObject {
         val features = JSONObject()
         featureValues.forEach { (feature, value) ->
@@ -985,7 +833,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             put("mcc", mcc)
             put("mnc", mnc)
             put("country_iso", countryIso)
-            put("country_mcc_override", countryMccOverride)
             put("features", features)
         }
     }
@@ -1017,7 +864,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 mnc = json.optString("mnc"),
                 countryIso = json.optString("country_iso"),
                 featureValues = features,
-                countryMccOverride = json.optString("country_mcc_override"),
             )
         }.getOrNull()
     }
@@ -1212,7 +1058,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             }
         }
 
-        emitLine("[7/8] 网络验证与国家码覆盖状态")
+        emitLine("[7/8] 网络验证状态")
         val captiveState = runCatching { queryCaptivePortalFixState() }.getOrNull()
         if (captiveState == null) {
             emitLine("- 网络验证状态读取失败")
@@ -1221,8 +1067,6 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             emitLine("- HTTP 验证地址 = ${captiveState.httpUrl}")
             emitLine("- HTTPS 验证地址 = ${captiveState.httpsUrl}")
         }
-        val savedMcc = loadSavedCountryMccOverride(selectedSim.subId)
-        emitLine("- 本地保存 MCC 覆盖 = ${savedMcc.ifBlank { "(空)" }}")
 
         emitLine("[8/8] 结论")
         val selectedImsStatus = imsStatusBySubId[selectedSim.subId]
@@ -1239,6 +1083,19 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         toast =
             Toast.makeText(application, msg, if (short) Toast.LENGTH_SHORT else Toast.LENGTH_LONG)
         toast?.show()
+    }
+
+    // 广告、打赏功能已移除：清理旧版本留下的广告展示记录和打赏凭证
+    private fun clearLegacySupportState() {
+        if (runtimePrefs.contains(LEGACY_AD_FREE_PREF_KEY) ||
+            runtimePrefs.contains(LEGACY_SUPPORT_CLIENT_REF_PREF_KEY)
+        ) {
+            runtimePrefs.edit {
+                remove(LEGACY_AD_FREE_PREF_KEY)
+                remove(LEGACY_SUPPORT_CLIENT_REF_PREF_KEY)
+            }
+        }
+        application.deleteSharedPreferences(LEGACY_AD_PREFS)
     }
 
     private fun checkAndMarkBootChanged(): Boolean {
@@ -1349,6 +1206,16 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     private suspend fun maybeRestoreSavedConfigurationAfterBoot() {
+        // 侧载开发版与官方版操作同一套系统 CarrierConfig。若两者都在启动时静默恢复
+        // 各自保存的旧值，就会互相覆盖，并且会写到用户并未选中的另一张 SIM 上。
+        // 因此开发版只接受用户显式点击触发的写入。
+        if (BuildConfig.SIDE_BY_SIDE_DEV_BUILD) {
+            if (pendingConfigRestoreAfterBoot) {
+                Log.i(TAG, "side-by-side dev build: skipping automatic config restore after boot")
+                pendingConfigRestoreAfterBoot = false
+            }
+            return
+        }
         if (!pendingConfigRestoreAfterBoot || restoringConfigAfterBoot) return
         restoringConfigAfterBoot = true
         try {
@@ -1373,11 +1240,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         for (sim in simList) {
             val saved = loadConfiguration(sim.subId) ?: continue
             attempted++
-            val resultMsg = onApplyConfiguration(
-                sim,
-                saved,
-                countryMccOverride = loadSavedCountryMccOverride(sim.subId)
-            )
+            val resultMsg = onApplyConfiguration(sim, saved)
             if (resultMsg == null) {
                 success++
             } else {

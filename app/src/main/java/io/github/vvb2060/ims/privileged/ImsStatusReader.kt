@@ -2,17 +2,14 @@ package io.github.vvb2060.ims.privileged
 
 import android.app.Activity
 import android.app.IActivityManager
-import android.app.Instrumentation
 import android.content.Context
 import android.os.Bundle
 import android.os.ServiceManager
 import android.system.Os
-import android.telephony.TelephonyFrameworkInitializer
 import android.util.Log
-import com.android.internal.telephony.ITelephony
 import rikka.shizuku.ShizukuBinderWrapper
 
-class ImsStatusReader : Instrumentation() {
+class ImsStatusReader : BackgroundInstrumentation() {
     companion object {
         private const val TAG = "ImsStatusReader"
         const val BUNDLE_SELECT_SIM_ID = "select_sim_id"
@@ -20,15 +17,14 @@ class ImsStatusReader : Instrumentation() {
         const val BUNDLE_RESULT_MSG = "result_msg"
     }
 
-    override fun onCreate(arguments: Bundle?) {
-        super.onCreate(arguments)
+    override fun execute(arguments: Bundle?) {
         if (arguments == null) {
             finish(Activity.RESULT_CANCELED, Bundle())
             return
         }
 
         val result = Bundle()
-        if (!waitForShizukuBinderReady()) {
+        if (!isShizukuBinderReady()) {
             result.putBoolean(BUNDLE_RESULT, false)
             result.putString(BUNDLE_RESULT_MSG, "shizuku binder is not ready")
             finish(Activity.RESULT_OK, result)
@@ -45,15 +41,7 @@ class ImsStatusReader : Instrumentation() {
                 result.putBoolean(BUNDLE_RESULT, false)
                 result.putString(BUNDLE_RESULT_MSG, "invalid subId")
             } else {
-                val telephony = ITelephony.Stub.asInterface(
-                    ShizukuBinderWrapper(
-                        TelephonyFrameworkInitializer
-                            .getTelephonyServiceManager()
-                            .getTelephonyServiceRegisterer()
-                            .get()!!
-                    )
-                )
-                val isRegistered = telephony.isImsRegistered(subId)
+                val isRegistered = readImsRegistered(subId)
                 Log.i(TAG, "IMS registration status: subId=$subId registered=$isRegistered")
                 result.putBoolean(BUNDLE_RESULT, isRegistered)
             }
