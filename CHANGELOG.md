@@ -1,11 +1,19 @@
 ## Unreleased
 
+### 恢复
+- 合并此前未进入 master 的 5G 开发线（`claude/5g-default-location-nsa-sa-x6yl6h`，25 个提交）：
+  - NR 模式：附加功能页可选 NSA / NSA+SA / SA（默认 NSA+SA），显示实际读回的 `carrier_nr_availabilities_int_array`，可随时重新读取
+  - 5G 数据诊断页：BAD / GOOD 快照与对比、ZIP 导出、按目标 SIM 的连通性与时延探测、后台监测与异常时自动采集
+  - 应用配置后以读回的系统 CarrierConfig 为准刷新界面并保存；回到前台时重新读取
+  - SIM 国家码显示统一使用 `CarrierIsoRules`
+
 ### 移除
 - 移除原项目残留的底栏「支持作者」「商务合作」页面、首页广告弹窗、合作页广告卡片、DoDoPay 打赏与去广告验证、商务合作表单，底栏只保留 IMS / 附加功能 / 关于
 - 移除应用内检查更新与下载安装（原指向 ryfineZ 仓库 Release），「打开仓库 / 提 Issue」改为指向 Hsujo/carrier-ims-for-pixel
 - 移除已无入口的 MCC 覆盖路径与国家码输入界面；如曾设置过 MCC 覆盖，执行一次「重置配置」即可清除
 
 ### 修复
+- 修复 Android 17 上功能开关打不开（打开后立即回弹）的问题：系统缺少无参的 `stopDelegateShellPermissionIdentity()`，清理权限委托时的异常不再把已成功的写入报成失败，改为提示兼容性警告
 - 修复关闭功能开关后系统配置不变的问题：应用配置时先清空该 SIM 的覆盖项再写入
 - 修复「5G+ 图标」开关读回永远显示开启的问题
 - 修复 targetSdk 36 禁止明文请求导致联网验证探测必然失败、网络验证状态误判的问题

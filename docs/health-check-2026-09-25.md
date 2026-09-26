@@ -3,6 +3,7 @@
 > 范围：`app/` 全部 Kotlin 源码、Gradle 配置、Manifest、资源与单元测试；对照 2026-09-18 体检报告逐项复核并处理。
 > 方式：静态通读 + 对照 AOSP 行为；本次环境有 Android SDK（platform 36 / build-tools 36），已完成 `testDebugUnitTest`、`assembleDebug`、`assembleRelease`（R8）构建。**没有真机**，标注「需真机验证」的项目请在设备上复核。
 > 分支：`claude/sweet-allen-656t9c`，基线提交 `e9035ac`。
+> 2026-09-26 追加：合并此前遗漏的 5G 开发线，并修复 Android 17 上开关打不开的问题，见第 8 节。
 
 ---
 
@@ -146,3 +147,56 @@ WebView（打赏支付页）与全尺寸广告图解码随对应功能一起删�
 | 残留检索 `dodopay / 3jiezhiwai / commercial / ad_free / RELEASES_LATEST / ryfineZ` | 源码与 `gradle.properties` 中仅剩清理旧数据用的 `ad_free` 键名 |
 | release APK 体积（与基线 `e9035ac` 同环境构建对比） | 3 041 766 → 2 823 638 字节（−7.2%） |
 | `./gradlew :app:lintDebug` | 119 errors / 64 warnings，均为既有问题：`MissingTranslation`（17 种语言未同步翻译）、`LocalContextGetResourceValueCall`、`MissingPermission`（`activeSubscriptionInfoList` / `dataNetworkType`）等；项目设置了 `checkReleaseBuilds = false`，不阻断构建 |
+
+---
+
+## 8. 2026-09-26 回归与修正
+
+合并本报告对应的 PR 后，在 Pixel 8 Pro（Android 17，API 37，`CP41.260831.007`）上安装侧载开发版（`3.9.0.d120.23d9d043`），发现两个问题。
+
+### 8.1 5G 开发线的功能缺失
+
+- **原因**：开发线 `claude/5g-default-location-nsa-sa-x6yl6h`（25 个提交，`e899a94` … `a46a2a4`）从未合入 master。本次复检以 master 为基线，没有先核对未合并的分支。同包名（`.hsujo`）的开发版被 master 构建替换后，这些功能也就不见了；代码本身没有丢失。
+- **处理**：用合并提交把开发线并入 `claude/sweet-allen-656t9c`，保留原提交历史。恢复的内容：
+  - NR 模式（NSA / NSA+SA / SA）及实际读回值；
+  - 5G 数据诊断页：
+    - BAD / GOOD 快照与对比、ZIP 导出；
+    - 按目标 SIM 的连通性与时延探测；
+    - 后台监测（前台服务）与异常时自动采集；
+    - 诊断用的 shell 通道是 Shizuku UserService（`shell/ShellService` + AIDL），也可以作为第 5 节第 1 条重构的起点；
+  - 写入后以读回的 CarrierConfig 为准（`ApplyResult`），回到前台时重新读取；
+  - `CarrierIsoRules` 统一 MCC → ISO 映射。
+- **冲突处理**：共 9 个文件冲突。
+  - 开发线的功能与注释全部保留。
+  - 本报告的删除项继续保持删除：Broker 重试、MCC 覆盖、不可达的文本输入回调、应用内更新。
+  - 写入语义上两者兼容：2.1 的「先清空再写入完整配置」正是开发线读回逻辑假定的「关闭 = 移除覆盖、回到运营商默认值」。NR 模式包含在完整配置里，不会被清空；QS 图块仍是单项合并写入。
+  - `MainViewModel` 补回只读配置的 `loadCurrentConfiguration()`，供写入后读回使用；选卡仍用 `loadCurrentState()` 一次读取配置与 IMS 状态。
+
+### 8.2 Android 17 上开关打不开 🔴
+
+- **现象**：打开 VoLTE 等开关后立即回弹。日志中 `SimReader` / `CaptivePortalFixer` / `ConfigReader` 报 `NoSuchMethodError: No interface method stopDelegateShellPermissionIdentity()V`。
+- **原因**：Android 17 的 `IActivityManager` 不再提供无参的 `stopDelegateShellPermissionIdentity()`。上面三处调用外有 try 保护，只记警告。但 `ImsModifier.overrideConfig()` 在 `finally` 中直接调用它，异常逃出后覆盖了**已经成功**的写入，`BUNDLE_RESULT=false`，界面随即回滚开关。QS 图块走同一路径，同样受影响。
+- **处理**：采用开发线 `571dc58` 的 `ShellPermissionDelegation`（`ShizukuCompat.kt`）：
+  - 只有开启委托失败才判定主操作失败；
+  - 清理永不抛出：先按方法名反射兜底，仍失败则作为 `BUNDLE_RESULT_WARNING` 上报，界面提示「已成功应用；清理兼容性警告」。
+  - 7 个特权类统一使用该封装，源码中已没有直接调用。
+
+### 8.3 验证记录
+
+| 检查 | 结果 |
+|---|---|
+| `./gradlew testDebugUnitTest -Pturboims.debugApplicationIdSuffix=.hsujo` | 通过：13 个测试类、67 项（开发线 11 个类 + 本报告 2 个类） |
+| `./gradlew assembleDebug -Pturboims.debugApplicationIdSuffix=.hsujo` | 通过；包名 `io.github.vvb2060.ims.mod.hsujo`，清单含 `DiagnosticsActivity`、`MonitorService` 与 7 个 Instrumentation，无 `REQUEST_INSTALL_PACKAGES` |
+| `./gradlew assembleRelease`（R8） | 通过；`shell/ShellService`、`IShellService`、`IShellService$Stub` 被 keep 规则保留 |
+| 检索 `start/stopDelegateShellPermissionIdentity(` 的直接调用 | 只在 `ShizukuCompat.kt` 的封装内部 |
+| 检索 `countryMcc`、`BrokerInstrumentation`、`UpdateApkCleanup`、广告 / 打赏符号 | 无 |
+| 与开发线 `a46a2a4` 逐行比对 | 开发线新增、却不在合并结果中的 19 行，全部属于上面的保持删除项（MCC 实参、Broker、文本输入回调）或 `setup-java` 升级 |
+| `actionlint` | 通过 |
+
+### 8.4 需真机验证清单（追加）
+
+- [ ] Android 17 上打开 / 关闭开关不再回弹，日志出现 `overrideConfig succeeded with cleanup compatibility warning`；QS 图块切换正常。
+- [ ] 附加功能页出现「5G 数据诊断」与「NR 模式」卡片。
+- [ ] 切换 NR 模式后「实际」数组与所选一致；5G NR 关闭时 NR 模式不可选。
+- [ ] 诊断页能采集 BAD / GOOD 快照并导出 ZIP；后台监测的前台通知正常。
+- [ ] 关闭一个开关后，读回显示运营商默认值。
