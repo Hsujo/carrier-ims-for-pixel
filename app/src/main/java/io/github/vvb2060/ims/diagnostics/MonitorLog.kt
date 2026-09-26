@@ -15,21 +15,52 @@ class MonitorLog(private val context: Context) {
 
     private val buffer = ArrayDeque<MonitorSample>()
     private val lock = Any()
+    private var loaded = false
 
     fun append(sample: MonitorSample) {
         synchronized(lock) {
+            loadPersistedLocked()
             buffer.addLast(sample)
             while (buffer.size > MAX_SAMPLES) buffer.removeFirst()
         }
     }
 
-    fun snapshotSamples(): List<MonitorSample> = synchronized(lock) { buffer.toList() }
+    fun snapshotSamples(): List<MonitorSample> = synchronized(lock) {
+        loadPersistedLocked()
+        buffer.toList()
+    }
 
-    fun size(): Int = synchronized(lock) { buffer.size }
+    fun size(): Int = synchronized(lock) {
+        loadPersistedLocked()
+        buffer.size
+    }
 
     fun clear() {
-        synchronized(lock) { buffer.clear() }
+        synchronized(lock) {
+            buffer.clear()
+            loaded = true
+        }
         runCatching { file().delete() }
+    }
+
+    /**
+     * 首次读写前先把已落盘的时间线装回缓冲。
+     *
+     * 服务进程被系统重建、或停止后再次开始监测时，缓冲都从空开始；
+     * 不先装回的话，第一次 flush 就会用新缓冲整体重写文件，把之前的故障历史抹掉。
+     * 表头与当前格式不一致（列改过）的旧文件不装回，避免新旧列错位。
+     */
+    private fun loadPersistedLocked() {
+        if (loaded) return
+        loaded = true
+        val lines = runCatching {
+            file().takeIf { it.isFile }?.readLines()
+        }.onFailure { Log.w(TAG, "failed to read monitor log", it) }.getOrNull() ?: return
+        if (lines.firstOrNull() != MonitorSample.CSV_HEADER) return
+        lines.drop(1)
+            .mapNotNull { MonitorSample.fromCsvRow(it) }
+            .takeLast(MAX_SAMPLES)
+            .forEach { buffer.addLast(it) }
     }
 
     /**

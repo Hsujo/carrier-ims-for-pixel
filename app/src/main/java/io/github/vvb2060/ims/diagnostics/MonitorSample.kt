@@ -55,6 +55,31 @@ data class MonitorSample(
         // 而当初时间线没有信号列，只能逐个打开快照才发现。
         const val CSV_HEADER =
             "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,thermal,config,note"
+
+        /**
+         * [toCsvRow] 的逆操作，重新开始监测时用来把已落盘的时间线装回内存。
+         *
+         * 各列在写入时已保证不含逗号，因此可以直接按逗号切分。
+         * 列数不对或时间戳、probe_ok 解析失败时返回 null，由调用方跳过该行。
+         */
+        fun fromCsvRow(row: String): MonitorSample? {
+            val values = row.split(",")
+            if (values.size != CSV_HEADER.split(",").size) return null
+            return MonitorSample(
+                atMillis = values[0].toLongOrNull() ?: return null,
+                rat = values[1],
+                validated = values[2],
+                ipv4 = values[3],
+                rttMs = values[4].toLongOrNull(),
+                jitterMs = values[5].toLongOrNull(),
+                probeOk = values[6].toBooleanStrictOrNull() ?: return null,
+                rsrp = values[7].toIntOrNull(),
+                sinr = values[8].toIntOrNull(),
+                thermal = values[9],
+                config = values[10],
+                note = values[11],
+            )
+        }
     }
 }
 

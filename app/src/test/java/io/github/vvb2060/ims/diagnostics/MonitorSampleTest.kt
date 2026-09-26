@@ -1,6 +1,7 @@
 package io.github.vvb2060.ims.diagnostics
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -66,5 +67,24 @@ class MonitorSampleTest {
         val values = sample().toCsvRow().split(",")
         assertEquals("MODERATE", values[columns.indexOf("thermal")])
         assertEquals("-88", values[columns.indexOf("rsrp")])
+    }
+
+    // 重新开始监测时要把已落盘的时间线装回内存，解析必须与写入严格互逆。
+    @Test
+    fun `a csv row parses back to the same sample`() {
+        assertEquals(sample(), MonitorSample.fromCsvRow(sample().toCsvRow()))
+    }
+
+    @Test
+    fun `null metrics survive the round trip`() {
+        val blank = sample().copy(rttMs = null, jitterMs = null, rsrp = null, sinr = null)
+        assertEquals(blank, MonitorSample.fromCsvRow(blank.toCsvRow()))
+    }
+
+    @Test
+    fun `malformed rows are skipped instead of misaligned`() {
+        assertNull(MonitorSample.fromCsvRow(""))
+        assertNull(MonitorSample.fromCsvRow(MonitorSample.CSV_HEADER))
+        assertNull(MonitorSample.fromCsvRow(sample().toCsvRow() + ",extra"))
     }
 }

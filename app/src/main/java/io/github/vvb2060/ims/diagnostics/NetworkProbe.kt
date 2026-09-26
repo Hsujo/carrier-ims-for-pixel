@@ -240,7 +240,6 @@ object NetworkProbe {
     ): Result = withContext(Dispatchers.IO) {
         // 链路状态只需要 ACCESS_NETWORK_STATE，枚举即可读到。
         val lookup = findCellularNetwork(context, targetSubId)
-        val link = collectLink(context, lookup)
 
         // 但要把 socket 绑上去，必须显式 requestNetwork 让系统授予使用权，
         // 否则 netd 会以 EPERM 拒绝绑定（枚举得到的 Network 不等于可用）。
@@ -255,6 +254,12 @@ object NetworkProbe {
                 null
             }
             val cellular = requested ?: lookup.getOrNull()
+            // 链路快照必须取自实际被探测的网络：requestNetwork 拿到的可能与枚举结果不同
+            // （双卡时的另一张卡、或申请后才拉起的 PDN），否则结论会把两个网络的数据拼在一起。
+            val link = collectLink(
+                context,
+                if (requested != null) kotlin.Result.success(requested) else lookup,
+            )
             val probedSubId = cellular?.let { subIdOf(cm, it) }
             // 两类探测互不依赖，并行执行以缩短现场等待时间。
             val triple = coroutineScope {

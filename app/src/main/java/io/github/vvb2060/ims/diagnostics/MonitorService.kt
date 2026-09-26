@@ -94,12 +94,19 @@ class MonitorService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        targetSubId = intent?.getIntExtra(EXTRA_SUB_ID, -1) ?: -1
+        // 拿不到启动 intent 就无从知道目标卡：盲测会把另一张卡的数据混进时间线，不如停止。
+        if (intent == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        targetSubId = intent.getIntExtra(EXTRA_SUB_ID, -1)
         startForeground(NOTIFICATION_ID, buildNotification("正在监测 subId=$targetSubId"))
         _running.value = true
         refreshConfigTag()
         scope.launch { runLoop() }
-        return START_STICKY
+        // 进程被系统回收后重启时，START_STICKY 会以 null intent 回调，目标 subId 随之丢失；
+        // START_REDELIVER_INTENT 会重投原始 intent，重启后仍监测同一张卡。
+        return START_REDELIVER_INTENT
     }
 
     private suspend fun runLoop() {
