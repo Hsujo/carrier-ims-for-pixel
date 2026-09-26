@@ -480,6 +480,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         bundle.putInt(ImsModifier.BUNDLE_SELECT_SIM_ID, selectedSim.subId)
         bundle.putBoolean(ImsModifier.BUNDLE_PREFER_PERSISTENT, canUsePersistentOverride)
         bundle.putBoolean(ImsModifier.BUNDLE_REPLACE, true)
+        // 应用到全部 SIM 时，各卡的 NR 数组与国家码覆盖由 ImsModifier 逐卡保留：
+        // NR 模式只能逐卡选择，这里的 NR_MODE 并不是用户为这些卡选的值。
+        if (selectedSim.subId < 0) bundle.putBoolean(ImsModifier.BUNDLE_KEEP_PER_SIM, true)
 
         // 调用 Shizuku 服务进行实际修改
         val overrideResult = ShizukuProvider.overrideImsConfig(application, bundle)
@@ -720,6 +723,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         selectedSim: SimSelection,
         map: Map<Feature, FeatureValue>,
     ): Result<IntArray?> {
+        // 应用到全部 SIM 时由 ImsModifier 逐卡保留（BUNDLE_KEEP_PER_SIM），这里无从按单卡判断。
         if (selectedSim.subId < 0) return Result.success(null)
         // 与 onApplyConfiguration 的取值方式一致：缺省视为开启。
         val enable5GNR = map[Feature.FIVE_G_NR]?.data as? Boolean ?: true

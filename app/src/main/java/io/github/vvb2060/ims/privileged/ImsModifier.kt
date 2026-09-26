@@ -14,6 +14,7 @@ import com.android.internal.telephony.ITelephony
 import io.github.vvb2060.ims.LogcatRepository
 import io.github.vvb2060.ims.model.FeatureConfigMapper
 import io.github.vvb2060.ims.model.NrMode
+import io.github.vvb2060.ims.model.PerSimOverrideRules
 import rikka.shizuku.ShizukuBinderWrapper
 
 class ImsModifier : BackgroundInstrumentation() {
@@ -46,6 +47,11 @@ class ImsModifier : BackgroundInstrumentation() {
          * 出现该键时 [BUNDLE_RESULT] 仍为 true，调用方不得据此判定失败。
          */
         const val BUNDLE_RESULT_WARNING = "result_warning"
+
+        /**
+         * 应用到全部 SIM 时置为 true：逐卡保留 NR 数组与国家码覆盖，见 [PerSimOverrideRules]。
+         */
+        const val BUNDLE_KEEP_PER_SIM = "keep_per_sim"
 
         fun buildResetBundle(): Bundle = Bundle().apply {
             putBoolean(BUNDLE_RESET, true)
@@ -258,9 +264,18 @@ class ImsModifier : BackgroundInstrumentation() {
             arguments.remove(BUNDLE_PREFER_PERSISTENT)
             val replace = arguments.getBoolean(BUNDLE_REPLACE, false)
             arguments.remove(BUNDLE_REPLACE)
+            val keepPerSim = arguments.getBoolean(BUNDLE_KEEP_PER_SIM, false)
+            arguments.remove(BUNDLE_KEEP_PER_SIM)
             val baseValues = if (reset) null else arguments.toPersistableBundle()
+            // 逐卡保留要在任何写入之前全部读完：清空之后读到的只是运营商默认值；
+            // 中途读取失败就整次放弃，不会只改了一部分卡。
+            val valuesBySubId = subIds.associateWith { subId ->
+                baseValues?.let { PersistableBundle(it) }?.also { values ->
+                    if (keepPerSim) keepPerSimSettings(cm, subId, values)
+                }
+            }
             for (subId in subIds) {
-                val values = baseValues?.let { PersistableBundle(it) }
+                val values = valuesBySubId[subId]
                 if (replace && values != null) {
                     Log.i(TAG, "clear existing overrides before replace for subId $subId")
                     applyOverrideConfig(
@@ -290,6 +305,32 @@ class ImsModifier : BackgroundInstrumentation() {
         // 主操作已成功。清理失败只作为返回值上报，不抛出，
         // 避免 finally 中的 NoSuchMethodError 覆盖掉一次成功的写入。
         return am.tryStopShellPermissionDelegation(TAG)
+    }
+
+    /**
+     * 把该卡当前的单卡设置写回 [values]，见 [PerSimOverrideRules]。
+     *
+     * 读不到该卡当前的配置就抛出、放弃整次写入：宁可不写，也不把各卡的设置统一改写。
+     */
+    private fun keepPerSimSettings(cm: CarrierConfigManager, subId: Int, values: PersistableBundle) {
+        // 与 ConfigReader 一致用整份读取：按键读取的重载要 API 34，而 minSdk 是 33。
+        @Suppress("DEPRECATION")
+        val current = cm.getConfigForSubId(subId)
+            ?: throw IllegalStateException("cannot read current carrier config for subId $subId")
+        PerSimOverrideRules.nrArrayToKeep(
+            values.containsKey(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY),
+            current.getIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY),
+        )?.let {
+            Log.i(TAG, "keeping NR array ${NrMode.formatAvailabilities(it)} for subId $subId")
+            values.putIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY, it)
+        }
+        PerSimOverrideRules.countryIsoToKeep(
+            values.containsKey(FeatureConfigMapper.KEY_SIM_COUNTRY_ISO_OVERRIDE),
+            current.getString(FeatureConfigMapper.KEY_SIM_COUNTRY_ISO_OVERRIDE),
+        )?.let {
+            Log.i(TAG, "keeping country ISO override $it for subId $subId")
+            values.putString(FeatureConfigMapper.KEY_SIM_COUNTRY_ISO_OVERRIDE, it)
+        }
     }
 
     @Throws(Exception::class)
