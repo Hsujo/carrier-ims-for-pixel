@@ -25,6 +25,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +40,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.vvb2060.ims.R
 import io.github.vvb2060.ims.viewmodel.DumpViewModel
 
@@ -56,7 +60,18 @@ class DumpActivity : BaseActivity() {
         val displayText = if (usingPresetText) presetText else state.text
         var filterText by remember { mutableStateOf("") }
 
-        LaunchedEffect(subId, presetText) {
+        // 每次回到前台都重新转储：Activity 实例被复用时，旧文本会让人误以为
+        // 系统配置没变，而实际上刚刚写入过。
+        val lifecycleOwner = LocalLifecycleOwner.current
+        var dumpRefreshSignal by remember { mutableStateOf(0) }
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) dumpRefreshSignal++
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+        LaunchedEffect(subId, presetText, dumpRefreshSignal) {
             if (!usingPresetText) {
                 viewModel.loadDump(subId)
             }

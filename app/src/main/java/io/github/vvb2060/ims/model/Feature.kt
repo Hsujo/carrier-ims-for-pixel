@@ -63,6 +63,18 @@ enum class Feature(
         R.string._5g_nr_desc,
         true,
     ),
+    /**
+     * NR 模式（NSA only / NSA+SA / SA only）。
+     *
+     * 仅在 [FIVE_G_NR] 启用时参与写入。存 STRING 是为了复用现有
+     * SharedPreferences 与 apply 管线；取值见 [NrMode.storageKey]。
+     */
+    NR_MODE(
+        FeatureValueType.STRING,
+        R.string.nr_mode,
+        R.string.nr_mode_desc,
+        "nsa_sa",
+    ),
     FIVE_G_THRESHOLDS(
         FeatureValueType.BOOLEAN,
         R.string._5g_thresholds,

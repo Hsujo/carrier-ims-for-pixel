@@ -11,9 +11,9 @@ object FeatureConfigMapper {
     private const val KEY_ADDITIONAL_NR_ADVANCED_BANDS = "additional_nr_advanced_bands_int_array"
     private const val KEY_5G_ICON_CONFIGURATION = "5g_icon_configuration_string"
     private const val KEY_NR_ADVANCED_CAPABLE_PCO_ID = "nr_advanced_capable_pco_id_int"
-    private const val KEY_VONR_ENABLED = "vonr_enabled_bool"
+    const val KEY_VONR_ENABLED = "vonr_enabled_bool"
     private const val KEY_VONR_SETTING_VISIBILITY = "vonr_setting_visibility_bool"
-    private const val KEY_SIM_COUNTRY_ISO_OVERRIDE = "sim_country_iso_override_string"
+    const val KEY_SIM_COUNTRY_ISO_OVERRIDE = "sim_country_iso_override_string"
     private val FIVE_G_THRESHOLDS = intArrayOf(-128, -118, -108, -98)
 
     // 5GA / 5G+ 图标写入值，ImsModifier 写入与此处读回共用
@@ -114,6 +114,11 @@ object FeatureConfigMapper {
         val nrEnabled = arr?.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA) == true ||
             arr?.contains(CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA) == true
         map[Feature.FIVE_G_NR] = FeatureValue(nrEnabled, FeatureValueType.BOOLEAN)
+        // 读不出已知模式时留空，由 UI 显示 UNKNOWN，不猜测。
+        map[Feature.NR_MODE] = FeatureValue(
+            NrMode.fromAvailabilities(arr)?.storageKey ?: "",
+            FeatureValueType.STRING
+        )
 
         val thresholds = bundle.getIntArray(CarrierConfigManager.KEY_5G_NR_SSRSRP_THRESHOLDS_INT_ARRAY)
         val thresholdEnabled = thresholds?.contentEquals(FIVE_G_THRESHOLDS) == true
