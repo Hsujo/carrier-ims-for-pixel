@@ -27,6 +27,15 @@ class ProbeProfileTest {
     }
 
     @Test
+    fun `network acquisition leaves room for latency within one budget`() {
+        // 时延预算从整次探测开始计时，申请网络的等待也从中扣除；
+        // 申请超时若不小于它，蜂窝中断时时延探测就一个样本都采不到。
+        NetworkProbe.Profile.entries.forEach { profile ->
+            assertTrue(profile.requestNetworkTimeoutMillis < profile.latencyBudgetMillis)
+        }
+    }
+
+    @Test
     fun `monitor profile trims the work that never varied in this fault`() {
         assertFalse(monitor.dnsEnabled)
         assertTrue(full.dnsEnabled)

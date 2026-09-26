@@ -77,6 +77,9 @@ class MonitorService : Service() {
      */
     private val configTagGeneration = AtomicInteger()
 
+    /** 读目标卡并分配代数、换卡并分配代数，这两组操作必须互斥，见 refreshConfigTag。 */
+    private val configTagLock = Any()
+
     /** 信号读取失败只记一次日志：每次采样都记会刷屏，一次不记则时间线里的空值无从解释。 */
     @Volatile
     private var signalFailureLogged = false
@@ -110,8 +113,13 @@ class MonitorService : Service() {
     }
 
     private fun refreshConfigTag() {
-        val subId = targetSubId
-        scope.launch { loadConfigTag(subId) }
+        // 代数在发起时就分配，不能等协程开始执行才分配：排队晚启动的旧请求
+        // 会抢到比新卡读取更新的代数，结果新旧两次读取都被丢弃，指纹一直停在未知。
+        // 读目标卡与分配代数在同一把锁里完成，与换卡互斥，理由同上。
+        val (subId, generation) = synchronized(configTagLock) {
+            targetSubId to configTagGeneration.incrementAndGet()
+        }
+        scope.launch { loadConfigTag(subId, generation) }
     }
 
     /**
@@ -119,9 +127,10 @@ class MonitorService : Service() {
      *
      * 读取期间可能已经换卡，或者又发起了更新的读取：这时结果已经过时，直接丢弃，
      * 不能让较早发起、较晚返回的读取用旧值覆盖新值。
+     *
+     * @param generation 发起这次读取时从 [configTagGeneration] 分配的代数。
      */
-    private suspend fun loadConfigTag(subId: Int) {
-        val generation = configTagGeneration.incrementAndGet()
+    private suspend fun loadConfigTag(subId: Int, generation: Int) {
         val tag = MonitorConfigTag.read(this@MonitorService, subId)
         if (generation != configTagGeneration.get() || subId != targetSubId) return
         if (tag != configTag) {
@@ -152,11 +161,15 @@ class MonitorService : Service() {
             val previousLoop = loopJob
             loopJob = scope.launch {
                 previousLoop?.cancelAndJoin()
-                targetSubId = subId
+                // 切换目标卡与分配代数原子完成：见 refreshConfigTag。
+                val generation = synchronized(configTagLock) {
+                    targetSubId = subId
+                    configTagGeneration.incrementAndGet()
+                }
                 // 先读到新卡的配置指纹再开始采样：否则头几条样本会带着旧卡的指纹。
                 // 读取结果被更新的读取取代时，宁可暂记未知，也不沿用旧卡的值。
                 configTag = MonitorConfigTag.UNKNOWN
-                loadConfigTag(subId)
+                loadConfigTag(subId, generation)
                 runLoop()
             }
         }

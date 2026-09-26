@@ -77,6 +77,7 @@ object NetworkProbe {
     enum class Profile(
         val latencySamples: Int,
         val latencyTimeoutMillis: Int,
+        // 从整次探测开始计时：申请蜂窝网络花掉的时间也从这份预算里扣除。
         /** 时延探测总预算：到点即停，已采到的样本照常保留。 */
         val latencyBudgetMillis: Long,
         val ipTargetCount: Int,
@@ -256,6 +257,9 @@ object NetworkProbe {
         targetSubId: Int? = null,
         profile: Profile = Profile.FULL,
     ): Result = withContext(Dispatchers.IO) {
+        // 时延预算从整次探测开始计时，申请网络花掉的时间也算在内：否则蜂窝中断时
+        // 先等满申请超时、再跑满时延预算，监测剖面一次探测要十几秒，加密采样无从谈起。
+        val startedAt = System.nanoTime()
         // 链路状态只需要 ACCESS_NETWORK_STATE，枚举即可读到。
         val lookup = findCellularNetwork(context, targetSubId)
 
@@ -285,11 +289,13 @@ object NetworkProbe {
             // 无法证明测的是目标卡，双卡时它很可能是默认数据卡，不能按目标卡下结论。
             val targetUnverified = targetSubId != null && targetSubId >= 0 &&
                 cellular != null && !bySpecificRequest && probedSubId == null
+            val latencyBudget =
+                (profile.latencyBudgetMillis - (System.nanoTime() - startedAt) / 1_000_000).coerceAtLeast(0)
             // 两类探测互不依赖，并行执行以缩短现场等待时间。
             val triple = coroutineScope {
                 val ip = async { probeIpReachability(cellular, profile) }
                 val dns = async { probeDnsResolution(cellular, profile) }
-                val lat = async { probeLatency(cellular, profile) }
+                val lat = async { probeLatency(cellular, profile, latencyBudget) }
                 Triple(ip.await(), dns.await(), lat.await())
             }
             val (ipProbe, dnsProbe, latency) = triple
@@ -607,7 +613,11 @@ object NetworkProbe {
      *   把后台采样周期一起拖垮（实测最长 76.6 秒）；
      * - **超时按下界计入**而不是丢弃，否则最差的时刻反而没有样本。
      */
-    private fun probeLatency(network: Network?, profile: Profile): LatencyResult {
+    private fun probeLatency(
+        network: Network?,
+        profile: Profile,
+        budgetMillis: Long = profile.latencyBudgetMillis,
+    ): LatencyResult {
         val target = IP_TARGETS.first()
         val samples = mutableListOf<Long>()
         var failures = 0
@@ -622,7 +632,7 @@ object NetworkProbe {
 
         repeat(profile.latencySamples) {
             // 预算用尽即停：已采到的样本照常保留，样本少也好过采样周期失控。
-            val remaining = profile.latencyBudgetMillis - elapsed()
+            val remaining = budgetMillis - elapsed()
             if (remaining <= 0) return@repeat
             // 单次超时不下调，但也不能越过剩余预算：否则一次超时之后还会再起一个完整超时，
             // 监测剖面的实际耗时可达预算的 1.5 倍，拖垮异常期间的加密采样节奏。
