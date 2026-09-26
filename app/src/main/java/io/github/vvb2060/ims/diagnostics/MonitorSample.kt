@@ -33,6 +33,12 @@ data class MonitorSample(
      */
     val config: String,
     val note: String,
+    /**
+     * 采样针对的 subId；未指定目标卡时为 null。
+     *
+     * 时间线会跨会话保留，先后监测过两张卡时，没有这一列就分不清哪条样本属于哪张卡。
+     */
+    val subId: Int? = null,
 ) {
     fun toCsvRow(): String = listOf(
         atMillis.toString(),
@@ -46,6 +52,7 @@ data class MonitorSample(
         sinr?.toString() ?: "",
         thermal,
         config,
+        subId?.toString() ?: "",
         note.replace(',', ';').replace('\n', ' '),
     ).joinToString(",")
 
@@ -53,8 +60,9 @@ data class MonitorSample(
         // 信号必须与抖动同行记录：只有并排看才能判断卡顿是不是弱信号导致的。
         // 实测证明两者不相关（-88dBm/SINR21 时抖动 4681ms），
         // 而当初时间线没有信号列，只能逐个打开快照才发现。
+        // note 是自由文本，保持在最后一列；sub_id 紧挨在它前面。
         const val CSV_HEADER =
-            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,thermal,config,note"
+            "at_millis,rat,validated,ipv4,rtt_ms,jitter_ms,probe_ok,rsrp,sinr,thermal,config,sub_id,note"
 
         /**
          * [toCsvRow] 的逆操作，重新开始监测时用来把已落盘的时间线装回内存。
@@ -77,7 +85,8 @@ data class MonitorSample(
                 sinr = values[8].toIntOrNull(),
                 thermal = values[9],
                 config = values[10],
-                note = values[11],
+                subId = values[11].toIntOrNull(),
+                note = values[12],
             )
         }
     }

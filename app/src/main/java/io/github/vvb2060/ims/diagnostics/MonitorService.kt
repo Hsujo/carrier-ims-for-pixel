@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.telephony.CarrierConfigManager
+import android.telephony.SubscriptionManager
 import android.os.IBinder
 import android.util.Log
 import io.github.vvb2060.ims.R
@@ -17,6 +18,7 @@ import io.github.vvb2060.ims.ShizukuProvider
 import io.github.vvb2060.ims.ui.DiagnosticsActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -41,6 +43,14 @@ class MonitorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var log: MonitorLog
     private var targetSubId: Int = -1
+
+    /**
+     * 正在进行的异常快照。
+     *
+     * 完整快照要跑多条 dumpsys / logcat 和一次完整探测，可能持续数十秒；
+     * 放在独立协程里执行，采样循环照常按加密节奏继续，劣化期间不会停摆。
+     */
+    private var captureJob: Job? = null
 
     /**
      * 当前生效的 CarrierConfig 指纹。
@@ -125,6 +135,7 @@ class MonitorService : Service() {
                     thermal = readThermal(),
                     config = configTag,
                     note = "sample_error:${it.javaClass.simpleName}",
+                    subId = targetSubId.takeIf { id -> id >= 0 },
                 )
             }
             log.append(sample)
@@ -132,10 +143,12 @@ class MonitorService : Service() {
 
             val reason = AnomalyRule.reasonFor(sample, previous)
             val now = System.currentTimeMillis()
-            if (reason != null && now - lastCaptureAt >= CAPTURE_COOLDOWN_MILLIS) {
+            if (reason != null && now - lastCaptureAt >= CAPTURE_COOLDOWN_MILLIS &&
+                captureJob?.isActive != true
+            ) {
                 lastCaptureAt = now
                 _lastTrigger.value = reason
-                captureOnAnomaly(reason)
+                captureJob = scope.launch { captureOnAnomaly(reason) }
             }
             previous = sample
             _sampleCount.value = log.size()
@@ -171,11 +184,7 @@ class MonitorService : Service() {
             targetSubId.takeIf { it >= 0 },
             NetworkProbe.Profile.MONITOR,
         )
-        val rat = runCatching { ShizukuSystemProperties.get("gsm.network.type", "") }
-            .getOrDefault("")
-            .split(',')
-            .firstOrNull()
-            .orEmpty()
+        val rat = readRat()
         val signal = readSignal()
         return MonitorSample(
             atMillis = System.currentTimeMillis(),
@@ -190,7 +199,23 @@ class MonitorService : Service() {
             thermal = readThermal(),
             config = configTag,
             note = probe.verdict.substringBefore(":"),
+            subId = targetSubId.takeIf { it >= 0 },
         )
+    }
+
+    /**
+     * 读取目标卡当前的 RAT。
+     *
+     * `gsm.network.type` 在多卡设备上是按逻辑卡槽（phone）序号逗号分隔的列表。
+     * 固定取第一项会把卡槽 0 的 RAT 记到卡槽 1 的采样名下，还会据此误触发 rat_change 抓取。
+     * 未指定目标卡时沿用第一项；目标卡的卡槽取不到时留空，不拿另一张卡的值充数。
+     */
+    private fun readRat(): String {
+        val values = runCatching { ShizukuSystemProperties.get("gsm.network.type", "") }
+            .getOrDefault("")
+            .split(',')
+        if (targetSubId < 0) return values.firstOrNull().orEmpty()
+        return values.getOrNull(SubscriptionManager.getSlotIndex(targetSubId)).orEmpty()
     }
 
     /**

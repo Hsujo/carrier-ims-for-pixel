@@ -82,6 +82,15 @@ class MonitorSampleTest {
     }
 
     @Test
+    fun `sub_id is recorded so a dual-SIM timeline can be split per SIM`() {
+        val tagged = sample().copy(subId = 2)
+        val columns = MonitorSample.CSV_HEADER.split(",")
+        val values = tagged.toCsvRow().split(",")
+        assertEquals("2", values[columns.indexOf("sub_id")])
+        assertEquals(tagged, MonitorSample.fromCsvRow(tagged.toCsvRow()))
+    }
+
+    @Test
     fun `malformed rows are skipped instead of misaligned`() {
         assertNull(MonitorSample.fromCsvRow(""))
         assertNull(MonitorSample.fromCsvRow(MonitorSample.CSV_HEADER))

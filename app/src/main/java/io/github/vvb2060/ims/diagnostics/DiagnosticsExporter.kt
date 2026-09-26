@@ -158,9 +158,10 @@ object DiagnosticsExporter {
         目录结构：
           metadata.json      导出信息与快照清单
           monitor_timeline.csv  后台监测的采样时间线（启用过监测时才有）
-                             含 rsrp/sinr/thermal/config 列：
+                             含 rsrp/sinr/thermal/config/sub_id 列：
                              config 是采样时刻生效的 CarrierConfig 指纹，
-                             配置中途被改时可据此把时间线切成可比的分段
+                             配置中途被改时可据此把时间线切成可比的分段；
+                             sub_id 是样本对应的 SIM，先后监测过两张卡时据此区分
           comparison.txt     BAD / GOOD 对照（样本齐备时才有内容）
           BAD_5G_*/          故障态快照
           GOOD_*/            正常态快照
