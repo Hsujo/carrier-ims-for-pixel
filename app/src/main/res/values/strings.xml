@@ -87,6 +87,18 @@
     <string name="ut_desc">Enable call waiting/forwarding services (carrier support required)</string>
     <string name="_5g_nr">5G NR (NSA/SA)</string>
     <string name="_5g_nr_desc">Enable 5G network (Non-Standalone/Standalone)</string>
+    <string name="nr_mode">NR mode</string>
+    <string name="nr_mode_desc">Which NR access modes the carrier config allows. Diagnostic control for 5G data problems.</string>
+    <string name="nr_mode_nsa">NSA only [1]</string>
+    <string name="nr_mode_nsa_sa">NSA + SA [1,2]</string>
+    <string name="nr_mode_sa">SA only [2] (experimental)</string>
+    <string name="nr_mode_target_sim">Target SIM</string>
+    <string name="nr_mode_requires_5g_nr">Enable 5G NR first to change the NR mode.</string>
+    <string name="nr_mode_reread">Re-read actual value</string>
+    <string name="nr_mode_actual">Actual: %s</string>
+    <string name="nr_mode_mismatch">Requested %1$s but carrier config reports %2$s</string>
+    <string name="nr_mode_requires_single_sim">Select a single SIM to change NR mode.</string>
+    <string name="nr_array_unreadable">Could not read the current NR availability array, so nothing was written to avoid overwriting values this app does not recognize. Please try again.</string>
     <string name="_5g_thresholds">5G Signal Strength Adjust</string>
     <string name="_5g_thresholds_desc">Adjust 5G signal strength to match China mainland thresholds</string>
     <string name="_5g_plus_icon">5GA/5G+ Icon</string>
@@ -187,6 +199,7 @@
     <string name="config_success_message">Configuration applied!</string>
     <string name="config_success_reset_message">Configuration reset!</string>
     <string name="config_failed">Configuration failed: %s</string>
+    <string name="config_applied_with_warning">Applied successfully; cleanup compatibility warning: %s</string>
     <string name="load_config_history_success">Loaded saved configuration history</string>
     <string name="load_config_default_success">Loaded default configuration</string>
     <string name="load_config_current_success">Loaded current system configuration</string>
@@ -217,4 +230,37 @@
 
     <!-- Logcat -->
     <string name="title_filter_log_level">Select filter log level</string>
+    <string name="diagnostics_5g_title">5G data diagnostics</string>
+    <string name="diagnostics_target">Target SIM</string>
+    <string name="diagnostics_no_sim">No single SIM selected; snapshots will omit SIM-specific data.</string>
+    <string name="diagnostics_shell_channel">Shell channel (Shizuku)</string>
+    <string name="diagnostics_shell_checking">Checking…</string>
+    <string name="diagnostics_shell_ok">Available — radio log and dumpsys can be collected.</string>
+    <string name="diagnostics_shell_unavailable">Unavailable — radio log and dumpsys will be missing from snapshots.</string>
+    <string name="diagnostics_live_status">Live cellular link</string>
+    <string name="diagnostics_live_unknown">Not read yet.</string>
+    <string name="diagnostics_refresh_live">Refresh live status</string>
+    <string name="diagnostics_capture">Capture snapshot</string>
+    <string name="diagnostics_capture_hint">Capture while the fault is happening, then again once the network recovers. This page never changes your preferred network type.</string>
+    <string name="diagnostics_record_bad">Record 5G fault</string>
+    <string name="diagnostics_record_good">Record normal state</string>
+    <string name="diagnostics_saved">Saved snapshots (%d)</string>
+    <string name="diagnostics_saved_empty">None yet.</string>
+    <string name="diagnostics_delete">Delete</string>
+    <string name="diagnostics_export_pending">Raw dumps are kept in full. ZIP export and BAD/GOOD comparison arrive in the next step.</string>
+    <string name="diagnostics_open">5G data diagnostics</string>
+    <string name="diagnostics_export">Export diagnostics ZIP</string>
+    <string name="diagnostics_export_privacy">Raw dumpsys and radio logs are kept in full and may contain IMSI, ICCID or IMEI. summary.txt and metadata.txt do not. Check before sharing outside.</string>
+    <string name="monitor_channel_name">Link monitoring</string>
+    <string name="monitor_channel_desc">Ongoing cellular link sampling started from the diagnostics page.</string>
+    <string name="monitor_notification_title">Monitoring cellular link</string>
+    <string name="monitor_stop">Stop</string>
+    <string name="monitor_title">Background monitoring</string>
+    <string name="monitor_desc">Samples the link every 20s into a bounded timeline, and switches to 5s sampling for a minute whenever it detects a fault — plus a full snapshot — so you do not have to catch the moment by hand.</string>
+    <string name="monitor_start">Start monitoring</string>
+    <string name="monitor_stop_action">Stop monitoring</string>
+    <string name="monitor_state">Samples %1$d · auto-captured %2$d</string>
+    <string name="monitor_last_trigger">Last trigger: %s</string>
+    <string name="monitor_notification_denied">Notification permission denied: monitoring still runs, but its status and Stop button will not appear in the notification shade. Come back to this page to stop it.</string>
+    <string name="monitor_bounded">Ring buffer capped at %d samples (~16h at the normal rate); the oldest are dropped, storage never grows without bound.</string>
 </resources>

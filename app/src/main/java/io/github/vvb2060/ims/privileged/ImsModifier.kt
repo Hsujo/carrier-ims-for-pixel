@@ -7,13 +7,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
 import android.os.ServiceManager
-import android.system.Os
 import android.telephony.CarrierConfigManager
 import android.telephony.SubscriptionManager
 import android.util.Log
 import com.android.internal.telephony.ITelephony
 import io.github.vvb2060.ims.LogcatRepository
 import io.github.vvb2060.ims.model.FeatureConfigMapper
+import io.github.vvb2060.ims.model.NrMode
+import io.github.vvb2060.ims.model.PerSimOverrideRules
 import rikka.shizuku.ShizukuBinderWrapper
 
 class ImsModifier : BackgroundInstrumentation() {
@@ -41,6 +42,17 @@ class ImsModifier : BackgroundInstrumentation() {
         const val BUNDLE_RESULT = "result"
         const val BUNDLE_RESULT_MSG = "result_msg"
 
+        /**
+         * 主操作成功、但 shell 权限委托清理失败时携带的警告原因。
+         * 出现该键时 [BUNDLE_RESULT] 仍为 true，调用方不得据此判定失败。
+         */
+        const val BUNDLE_RESULT_WARNING = "result_warning"
+
+        /**
+         * 应用到全部 SIM 时置为 true：逐卡保留 NR 数组与国家码覆盖，见 [PerSimOverrideRules]。
+         */
+        const val BUNDLE_KEEP_PER_SIM = "keep_per_sim"
+
         fun buildResetBundle(): Bundle = Bundle().apply {
             putBoolean(BUNDLE_RESET, true)
         }
@@ -58,6 +70,11 @@ class ImsModifier : BackgroundInstrumentation() {
             enable5GThreshold: Boolean,
             enable5GPlusIcon: Boolean,
             enableShow4GForLTE: Boolean,
+            // 不给默认值：漏传会静默写出与实际不符的数组，必须由调用方显式决定。
+            nrMode: NrMode,
+            // 非 null 时原样写入这个数组而不是 nrMode 对应的数组：
+            // 用于保留系统里含无法识别取值的 NR 数组，避免被改写成默认模式。
+            nrAvailabilitiesOverride: IntArray? = null,
         ): Bundle {
             val bundle = Bundle()
             // 运营商名称
@@ -137,10 +154,7 @@ class ImsModifier : BackgroundInstrumentation() {
             if (enable5GNR) {
                 bundle.putIntArray(
                     CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY,
-                    intArrayOf(
-                        CarrierConfigManager.CARRIER_NR_AVAILABILITY_NSA,
-                        CarrierConfigManager.CARRIER_NR_AVAILABILITY_SA
-                    )
+                    nrAvailabilitiesOverride ?: nrMode.toAvailabilities()
                 )
                 if (enable5GPlusIcon) {
                     // 5GA / 5G+ 图标判定逻辑：
@@ -185,11 +199,19 @@ class ImsModifier : BackgroundInstrumentation() {
         Log.i(TAG, "shizuku binder is ready")
 
         try {
-            overrideConfig(arguments ?: Bundle())
+            val cleanupWarning = overrideConfig(arguments ?: Bundle())
             if (LogcatRepository.isCapturing()) {
                 Log.i(TAG, "overrideConfig success")
             }
             results.putBoolean(BUNDLE_RESULT, true)
+            // 主操作已成功。权限委托清理失败只作为警告上报，绝不能翻转成失败。
+            if (cleanupWarning != null) {
+                Log.w(TAG, "overrideConfig succeeded with cleanup compatibility warning")
+                results.putString(
+                    BUNDLE_RESULT_WARNING,
+                    cleanupWarning.message ?: cleanupWarning.javaClass.simpleName
+                )
+            }
         } catch (t: Throwable) {
             if (LogcatRepository.isCapturing()) {
                 Log.i(TAG, "overrideConfig failed")
@@ -201,12 +223,27 @@ class ImsModifier : BackgroundInstrumentation() {
         finish(Activity.RESULT_OK, results)
     }
 
+    /**
+     * 执行 CarrierConfig 写入。
+     *
+     * @return 主操作成功、但权限委托清理失败时返回该失败原因；全部成功返回 null。
+     *         主操作失败时抛出异常。
+     */
     @Throws(Exception::class)
-    private fun overrideConfig(arguments: Bundle) {
+    private fun overrideConfig(arguments: Bundle): Throwable? {
         val binder = ServiceManager.getService(Context.ACTIVITY_SERVICE)
         val am = IActivityManager.Stub.asInterface(ShizukuBinderWrapper(binder))
         Log.i(TAG, "starting shell permission delegation")
-        am.startDelegateShellPermissionIdentity(Os.getuid(), null)
+        var startFailure: Throwable? = null
+        // 委托是特权写入的前置条件：开启失败就直接判定主操作失败，
+        // 而不是继续执行并收到一个更难解释的 SecurityException。
+        if (!am.tryStartShellPermissionDelegation(TAG) { startFailure = it }) {
+            throw IllegalStateException(
+                "failed to start shell permission delegation: " +
+                    (startFailure?.message ?: startFailure?.javaClass?.simpleName ?: "unknown"),
+                startFailure
+            )
+        }
         try {
             val cm = context.getSystemService(CarrierConfigManager::class.java)
             val sm = context.getSystemService(SubscriptionManager::class.java)
@@ -227,9 +264,18 @@ class ImsModifier : BackgroundInstrumentation() {
             arguments.remove(BUNDLE_PREFER_PERSISTENT)
             val replace = arguments.getBoolean(BUNDLE_REPLACE, false)
             arguments.remove(BUNDLE_REPLACE)
+            val keepPerSim = arguments.getBoolean(BUNDLE_KEEP_PER_SIM, false)
+            arguments.remove(BUNDLE_KEEP_PER_SIM)
             val baseValues = if (reset) null else arguments.toPersistableBundle()
+            // 逐卡保留要在任何写入之前全部读完：清空之后读到的只是运营商默认值；
+            // 中途读取失败就整次放弃，不会只改了一部分卡。
+            val valuesBySubId = subIds.associateWith { subId ->
+                baseValues?.let { PersistableBundle(it) }?.also { values ->
+                    if (keepPerSim) keepPerSimSettings(cm, subId, values)
+                }
+            }
             for (subId in subIds) {
-                val values = baseValues?.let { PersistableBundle(it) }
+                val values = valuesBySubId[subId]
                 if (replace && values != null) {
                     Log.i(TAG, "clear existing overrides before replace for subId $subId")
                     applyOverrideConfig(
@@ -250,9 +296,40 @@ class ImsModifier : BackgroundInstrumentation() {
                     clearCarrierTestOverride(subId)
                 }
             }
-        } finally {
-            am.stopDelegateShellPermissionIdentity()
-            Log.i(TAG, "stopped shell permission delegation")
+        } catch (t: Throwable) {
+            // 主操作失败：先尽力清理，再把原始失败原因抛给调用方。
+            // 清理结果在这条路径上不重要，绝不能遮蔽真正的失败。
+            am.tryStopShellPermissionDelegation(TAG)
+            throw t
+        }
+        // 主操作已成功。清理失败只作为返回值上报，不抛出，
+        // 避免 finally 中的 NoSuchMethodError 覆盖掉一次成功的写入。
+        return am.tryStopShellPermissionDelegation(TAG)
+    }
+
+    /**
+     * 把该卡当前的单卡设置写回 [values]，见 [PerSimOverrideRules]。
+     *
+     * 读不到该卡当前的配置就抛出、放弃整次写入：宁可不写，也不把各卡的设置统一改写。
+     */
+    private fun keepPerSimSettings(cm: CarrierConfigManager, subId: Int, values: PersistableBundle) {
+        // 与 ConfigReader 一致用整份读取：按键读取的重载要 API 34，而 minSdk 是 33。
+        @Suppress("DEPRECATION")
+        val current = cm.getConfigForSubId(subId)
+            ?: throw IllegalStateException("cannot read current carrier config for subId $subId")
+        PerSimOverrideRules.nrArrayToKeep(
+            values.containsKey(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY),
+            current.getIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY),
+        )?.let {
+            Log.i(TAG, "keeping NR array ${NrMode.formatAvailabilities(it)} for subId $subId")
+            values.putIntArray(CarrierConfigManager.KEY_CARRIER_NR_AVAILABILITIES_INT_ARRAY, it)
+        }
+        PerSimOverrideRules.countryIsoToKeep(
+            values.containsKey(FeatureConfigMapper.KEY_SIM_COUNTRY_ISO_OVERRIDE),
+            current.getString(FeatureConfigMapper.KEY_SIM_COUNTRY_ISO_OVERRIDE),
+        )?.let {
+            Log.i(TAG, "keeping country ISO override $it for subId $subId")
+            values.putString(FeatureConfigMapper.KEY_SIM_COUNTRY_ISO_OVERRIDE, it)
         }
     }
 

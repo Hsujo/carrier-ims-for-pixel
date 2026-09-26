@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 诊断页读取蜂窝链路状态（地址/路由/DNS/VALIDATED）所需。普通权限，安装即授予。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- requestNetwork 所需：只有显式申请蜂窝网络，系统才准许本应用把 socket
+         绑定到它；仅靠枚举 allNetworks 去绑定会被 netd 拒绝（EPERM）。普通权限。 -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- 后台持续监测需要前台服务；仅做只读采样，不修改任何系统配置。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="io.github.vvb2060.ims.Application"
@@ -32,6 +41,19 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden|navigation|density"
             android:exported="false"
             android:theme="@style/Theme.TurbolIms" />
+        <activity
+            android:name="io.github.vvb2060.ims.ui.DiagnosticsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TurbolIms" />
+
+        <service
+            android:name="io.github.vvb2060.ims.diagnostics.MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous cellular link diagnostics requested by the user" />
+        </service>
 
         <service
             android:name="io.github.vvb2060.ims.tiles.SIM1VoLTETileService"
