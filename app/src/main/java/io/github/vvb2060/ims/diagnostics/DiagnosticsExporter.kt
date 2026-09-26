@@ -53,6 +53,9 @@ object DiagnosticsExporter {
                 val zipFile = File(exportDir, "TurboIMS_${deviceTag()}_${tag}_$stamp.zip")
 
                 val summaries = mutableMapOf<SnapshotKind, SnapshotSummary>()
+                // BAD / GOOD 必须来自同一张卡，按各快照 metadata.txt 里的 sub_id 配对。
+                val subIds = snapshots.associateWith { subIdOf(it) }
+                val (pairBad, pairGood) = SnapshotComparison.pickPair(snapshots, { it.kind }) { subIds[it] }
 
                 ZipOutputStream(zipFile.outputStream().buffered()).use { zip ->
                     snapshots.forEach { snapshot ->
@@ -66,7 +69,8 @@ object DiagnosticsExporter {
                             }.onFailure { Log.w(TAG, "failed to add ${file.name}", it) }
                         }
                         // 取每种类型最新的一份用于对比。
-                        if (!summaries.containsKey(snapshot.kind)) {
+                        // GOOD 取的是与最新 BAD 同一张卡的那份，见 SnapshotComparison.pickPair。
+                        if (snapshot == pairBad || snapshot == pairGood) {
                             val texts = files.associate { it.name to runCatching { it.readText() }.getOrDefault("") }
                             summaries[snapshot.kind] = SnapshotSummary.fromFiles(
                                 snapshot.name, snapshot.kind, texts
@@ -91,7 +95,7 @@ object DiagnosticsExporter {
                         SnapshotComparison.toText(
                             summaries[SnapshotKind.BAD],
                             summaries[SnapshotKind.GOOD],
-                        )
+                        ) + crossSimNote(pairBad, pairGood, snapshots, subIds)
                     )
                     writeEntry(zip, "README.txt", buildReadme())
                 }
@@ -106,6 +110,25 @@ object DiagnosticsExporter {
                 Export(zipFile, uri, snapshots.size)
             }
         }
+
+    /** 快照采集时的目标卡，取自 metadata.txt 的 sub_id 行；读不到时为 null。 */
+    private fun subIdOf(snapshot: SnapshotStore.StoredSnapshot): String? =
+        runCatching { File(snapshot.directory, "metadata.txt").readLines() }
+            .getOrNull()
+            ?.firstOrNull { it.startsWith("sub_id=") }
+            ?.substringAfter('=')
+
+    /** 已有 GOOD、但都不是这张卡的：写明原因，免得被误以为漏采。 */
+    private fun crossSimNote(
+        bad: SnapshotStore.StoredSnapshot?,
+        good: SnapshotStore.StoredSnapshot?,
+        snapshots: List<SnapshotStore.StoredSnapshot>,
+        subIds: Map<SnapshotStore.StoredSnapshot, String?>,
+    ): String {
+        if (bad == null || good != null || snapshots.none { it.kind == SnapshotKind.GOOD }) return ""
+        return "\n注：现有的 GOOD 快照都不属于 ${bad.name} 所在的卡（sub_id=${subIds[bad] ?: "未知"}），" +
+            "不同卡之间不做对比。\n"
+    }
 
     private fun writeEntry(zip: ZipOutputStream, name: String, content: String) {
         runCatching {
@@ -162,7 +185,7 @@ object DiagnosticsExporter {
                              config 是采样时刻生效的 CarrierConfig 指纹，
                              配置中途被改时可据此把时间线切成可比的分段；
                              sub_id 是样本对应的 SIM，先后监测过两张卡时据此区分
-          comparison.txt     BAD / GOOD 对照（样本齐备时才有内容）
+          comparison.txt     BAD / GOOD 对照（只在同一张卡的快照间配对，样本齐备时才有内容）
           BAD_5G_*/          故障态快照
           GOOD_*/            正常态快照
             metadata.txt     设备、SIM、CarrierConfig 关键项

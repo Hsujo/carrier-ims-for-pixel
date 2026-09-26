@@ -112,8 +112,8 @@ class DiagnosticsActivity : BaseActivity() {
                 CaptureCard(
                     capturing = state.capturing,
                     progress = state.progress,
-                    onRecordBad = { viewModel.capture(SnapshotKind.BAD, selectedSim) },
-                    onRecordGood = { viewModel.capture(SnapshotKind.GOOD, selectedSim) },
+                    onRecordBad = { viewModel.capture(SnapshotKind.BAD, selectedSim, subId) },
+                    onRecordGood = { viewModel.capture(SnapshotKind.GOOD, selectedSim, subId) },
                 )
                 SnapshotListCard(
                     snapshots = state.snapshots,

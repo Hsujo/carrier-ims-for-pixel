@@ -1,6 +1,7 @@
 package io.github.vvb2060.ims.diagnostics
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -37,6 +38,31 @@ class SnapshotComparisonTest {
             summary(SnapshotKind.GOOD, "apn" to "3gnet"),
         )!!
         assertTrue(diffs.none { it.changed })
+    }
+
+    @Test
+    fun badAndGoodArePairedFromTheSameSim() {
+        // 从新到旧：最新的 GOOD 属于 subId=2，最新的 BAD 属于 subId=1。
+        val newestFirst = listOf(
+            Triple("GOOD_sub2", SnapshotKind.GOOD, "2"),
+            Triple("BAD_sub1", SnapshotKind.BAD, "1"),
+            Triple("GOOD_sub1", SnapshotKind.GOOD, "1"),
+        )
+        val (bad, good) = SnapshotComparison.pickPair(newestFirst, { it.second }, { it.third })
+        assertEquals("BAD_sub1", bad?.first)
+        assertEquals("GOOD_sub1", good?.first)
+
+        // 同一张卡没有 GOOD 时宁可缺失，也不拿另一张卡的来比。
+        val (onlyBad, noGood) = SnapshotComparison.pickPair(newestFirst.take(2), { it.second }, { it.third })
+        assertEquals("BAD_sub1", onlyBad?.first)
+        assertNull(noGood)
+
+        // 没有 BAD 时只给出最新的 GOOD。
+        val (noBad, latestGood) = SnapshotComparison.pickPair(
+            listOf(newestFirst[0], newestFirst[2]), { it.second }, { it.third }
+        )
+        assertNull(noBad)
+        assertEquals("GOOD_sub2", latestGood?.first)
     }
 
     @Test

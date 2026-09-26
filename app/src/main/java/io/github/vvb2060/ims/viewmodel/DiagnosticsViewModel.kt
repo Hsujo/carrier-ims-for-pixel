@@ -86,8 +86,11 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
 
     /**
      * 采集一次快照。所有采集失败都会记录进快照本身，不会中断流程。
+     *
+     * @param targetSubId 页面 intent 指定的目标卡。SIM 列表尚未读到或读取失败时
+     *        [selectedSim] 为 null，仍用它限定探测与读取的卡，避免双卡时退回默认数据卡。
      */
-    fun capture(kind: SnapshotKind, selectedSim: SimSelection?) {
+    fun capture(kind: SnapshotKind, selectedSim: SimSelection?, targetSubId: Int = -1) {
         if (_uiState.value.capturing) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(capturing = true, progress = "准备中", message = null)
@@ -96,6 +99,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     context = getApplication(),
                     kind = kind,
                     selectedSim = selectedSim,
+                    targetSubId = selectedSim?.subId ?: targetSubId.takeIf { it >= 0 },
                 ) { step ->
                     _uiState.value = _uiState.value.copy(progress = step)
                 }

@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import rikka.shizuku.ShizukuSystemProperties
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 后台持续监测。
@@ -71,6 +72,12 @@ class MonitorService : Service() {
     private var configTag: String = MonitorConfigTag.UNKNOWN
 
     /**
+     * 每次发起读取都递增。读取要走 instrumentation，可能排队或变慢，
+     * 只有最新一次发起的读取才能发布结果。
+     */
+    private val configTagGeneration = AtomicInteger()
+
+    /**
      * CarrierConfig 变更广播。
      *
      * 必须监听而不是只信本应用写过什么：实测配置被另一个应用改掉过，
@@ -99,12 +106,23 @@ class MonitorService : Service() {
     }
 
     private fun refreshConfigTag() {
-        scope.launch {
-            val tag = MonitorConfigTag.read(this@MonitorService, targetSubId)
-            if (tag != configTag) {
-                Log.i(TAG, "carrier config now: $tag (was $configTag)")
-                configTag = tag
-            }
+        val subId = targetSubId
+        scope.launch { loadConfigTag(subId) }
+    }
+
+    /**
+     * 读取 [subId] 的配置指纹并发布到 [configTag]。
+     *
+     * 读取期间可能已经换卡，或者又发起了更新的读取：这时结果已经过时，直接丢弃，
+     * 不能让较早发起、较晚返回的读取用旧值覆盖新值。
+     */
+    private suspend fun loadConfigTag(subId: Int) {
+        val generation = configTagGeneration.incrementAndGet()
+        val tag = MonitorConfigTag.read(this@MonitorService, subId)
+        if (generation != configTagGeneration.get() || subId != targetSubId) return
+        if (tag != configTag) {
+            Log.i(TAG, "carrier config now: $tag (was $configTag)")
+            configTag = tag
         }
     }
 
@@ -131,7 +149,10 @@ class MonitorService : Service() {
             loopJob = scope.launch {
                 previousLoop?.cancelAndJoin()
                 targetSubId = subId
-                refreshConfigTag()
+                // 先读到新卡的配置指纹再开始采样：否则头几条样本会带着旧卡的指纹。
+                // 读取结果被更新的读取取代时，宁可暂记未知，也不沿用旧卡的值。
+                configTag = MonitorConfigTag.UNKNOWN
+                loadConfigTag(subId)
                 runLoop()
             }
         }

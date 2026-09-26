@@ -48,6 +48,25 @@ object SnapshotComparison {
     }
 
     /**
+     * 选出用于对比的 BAD / GOOD：取最新的 BAD，再取与它同一张卡（[subIdOf] 相同）的最新 GOOD。
+     *
+     * 双卡时各自最新的 BAD 与 GOOD 可能分属两张卡，直接对比会把卡与卡之间的差异当成劣化证据。
+     * 没有 BAD 时只取最新的 GOOD；同一张卡没有 GOOD 时 GOOD 为 null，由 [toText] 写明样本不足。
+     *
+     * @param newestFirst 按采集时间从新到旧排列。
+     */
+    fun <T> pickPair(
+        newestFirst: List<T>,
+        kindOf: (T) -> SnapshotKind,
+        subIdOf: (T) -> String?,
+    ): Pair<T?, T?> {
+        val bad = newestFirst.firstOrNull { kindOf(it) == SnapshotKind.BAD }
+            ?: return null to newestFirst.firstOrNull { kindOf(it) == SnapshotKind.GOOD }
+        val target = subIdOf(bad)
+        return bad to newestFirst.firstOrNull { kindOf(it) == SnapshotKind.GOOD && subIdOf(it) == target }
+    }
+
+    /**
      * @return null 表示缺少可比的样本对。
      */
     fun compare(bad: SnapshotSummary?, good: SnapshotSummary?): List<FieldDiff>? {
