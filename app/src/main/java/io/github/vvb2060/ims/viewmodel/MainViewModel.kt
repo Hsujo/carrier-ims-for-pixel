@@ -574,6 +574,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
      * CarrierConfig 的生效是异步的：写入刚返回就读，可能还是写入前的值。
      * 若直接拿它刷新界面并落盘，刚打开的开关会被「读回」成关闭而回弹，旧值也会被存下来。
      * 因此只要存在可校验项、且读回尚未体现写入（或读取失败），就间隔重读几次；
+     * 刚关闭的开关读回仍为开时同样再等几轮，见 [ApplyReadbackRules.isSettled]；
      * 仍不一致时照常返回最后一次读回 —— 那才是系统的真实状态。
      */
     private suspend fun readBackAfterApply(
@@ -583,15 +584,18 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     ): Map<Feature, FeatureValue>? {
         var readback = loadCurrentConfiguration(subId)
         // 应用到全部 SIM（subId < 0）时没有单卡可读回，也就无从等待。
-        if (subId < 0 ||
-            !ApplyReadbackRules.hasVerifiableTarget(requested, resolvedCountryIso, Build.VERSION.SDK_INT)
-        ) {
+        if (subId < 0) {
             return readback
         }
         var retries = 0
         while (
             retries < READBACK_RETRY_COUNT &&
-            (readback == null || !readbackConfirms(readback, requested, resolvedCountryIso))
+            (readback == null || !ApplyReadbackRules.isSettled(
+                readback,
+                requested,
+                resolvedCountryIso,
+                Build.VERSION.SDK_INT,
+            ))
         ) {
             delay(READBACK_RETRY_DELAY_MS)
             readback = loadCurrentConfiguration(subId) ?: readback

@@ -101,6 +101,41 @@ class ApplyReadbackRulesTest {
     }
 
     @Test
+    fun disabledSwitchStillReadingOnIsNotSettled() {
+        // 关掉 VoWiFi、VoLTE 仍开：刚写入时 VoWiFi 读回仍为开，多半是旧值。
+        val requested = allOff().apply { put(Feature.VOLTE, on()) }
+        val stale = allOff().apply {
+            put(Feature.VOLTE, on())
+            put(Feature.VOWIFI, on())
+        }
+        // confirms 不看关闭项（关闭态读回的是运营商默认值），但读回还不算稳定。
+        assertTrue(ApplyReadbackRules.confirms(stale, requested, null, api34))
+        assertFalse(ApplyReadbackRules.isSettled(stale, requested, null, api34))
+
+        val applied = allOff().apply { put(Feature.VOLTE, on()) }
+        assertTrue(ApplyReadbackRules.isSettled(applied, requested, null, api34))
+    }
+
+    @Test
+    fun settledRequiresTheEnabledTargetsToo() {
+        val requested = allOff().apply { put(Feature.VOLTE, on()) }
+        assertFalse(ApplyReadbackRules.isSettled(allOff(), requested, null, api34))
+        // 没有可校验项、也没有待刷新的关闭项：读回即可采用。
+        assertTrue(ApplyReadbackRules.isSettled(allOff(), allOff(), null, api34))
+    }
+
+    @Test
+    fun switchesNeverWrittenOnThisSdkDoNotDelaySettling() {
+        // Android 13 从不写 VoNR 与国家码，读回的运营商默认值再等也不会变。
+        val readback = allOff().apply {
+            put(Feature.VONR, on())
+            put(Feature.TIKTOK_NETWORK_FIX, on())
+        }
+        assertTrue(ApplyReadbackRules.isSettled(readback, allOff(), null, api33))
+        assertFalse(ApplyReadbackRules.isSettled(readback, allOff(), null, api34))
+    }
+
+    @Test
     fun countryIsoIsComparedIgnoringCase() {
         val requested = allOff()
         val readback = allOff().apply { put(Feature.COUNTRY_ISO, text("CN")) }

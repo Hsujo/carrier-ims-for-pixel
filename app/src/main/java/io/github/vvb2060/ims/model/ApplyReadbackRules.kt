@@ -56,6 +56,44 @@ object ApplyReadbackRules {
             isNrModeVerifiable(requested) ||
             isIsoVerifiable(resolvedCountryIso, sdkInt)
 
+    /**
+     * 读回是否已经稳定，可以用来刷新界面和落盘。
+     *
+     * 在 [confirms] 之外还要看关闭项。关闭是移除 override，读回的是运营商默认值，
+     * 默认值本身可能就是开，所以 [confirms] 不校验它，也不能据此判写入失败。
+     * 但刚写入时，关闭项读回仍为开更可能只是旧值还没刷新：直接采用，
+     * 刚关掉的开关就会弹回去。调用方据此多等几轮；重读用完仍为开，就以最后一次读回为准。
+     */
+    fun isSettled(
+        readback: Map<Feature, FeatureValue>,
+        requested: Map<Feature, FeatureValue>,
+        resolvedCountryIso: String?,
+        sdkInt: Int,
+    ): Boolean {
+        if (hasVerifiableTarget(requested, resolvedCountryIso, sdkInt) &&
+            !confirms(readback, requested, resolvedCountryIso, sdkInt)
+        ) {
+            return false
+        }
+        return requested.none { (feature, target) ->
+            isClearableSwitch(feature, sdkInt) &&
+                (target.data as? Boolean) == false &&
+                (readback[feature]?.data as? Boolean) == true
+        }
+    }
+
+    // 关闭时写入会清掉 override 的开关。VoNR 与国家码（TikTok 修复经由国家码实现）
+    // 在 Android 14 以下从不写入，读回始终是运营商默认值，等多久都不会变。
+    private fun isClearableSwitch(feature: Feature, sdkInt: Int): Boolean {
+        if (feature.valueType != FeatureValueType.BOOLEAN) return false
+        if ((feature == Feature.VONR || feature == Feature.TIKTOK_NETWORK_FIX) &&
+            sdkInt < Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        ) {
+            return false
+        }
+        return true
+    }
+
     private fun isVerifiableSwitch(
         feature: Feature,
         target: FeatureValue,
