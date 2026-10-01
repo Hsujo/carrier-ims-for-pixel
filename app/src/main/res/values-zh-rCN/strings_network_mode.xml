@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="qs_network_title_sim_1">4G/5G（SIM 1）</string>
+    <string name="qs_network_title_sim_2">4G/5G（SIM 2）</string>
+    <string name="qs_network_5g_allowed">5G 已允许</string>
+    <string name="qs_network_5g_disabled">5G 已关闭</string>
+    <string name="qs_network_no_sim">无有效 SIM</string>
+    <string name="qs_network_needs_shizuku">需要 Shizuku 授权</string>
+    <string name="qs_network_unsupported">不支持 5G</string>
+    <string name="qs_network_read_failed">无法读取网络偏好</string>
+    <string name="qs_network_switching">正在切换…</string>
+    <string name="qs_network_switch_failed">未能确认网络模式切换成功，请查看磁贴状态和日志。</string>
+</resources>

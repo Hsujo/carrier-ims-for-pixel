@@ -31,9 +31,7 @@ abstract class BaseSimTileService : TileService() {
         serviceScope.cancel()
     }
 
-    protected fun launch(block: suspend () -> Unit) {
-        serviceScope.launch { block() }
-    }
+    protected fun launch(block: suspend () -> Unit) = serviceScope.launch { block() }
 
     protected fun isShizukuReady(): Boolean {
         return Shizuku.pingBinder() &&
