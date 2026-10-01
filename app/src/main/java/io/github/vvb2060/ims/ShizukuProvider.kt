@@ -19,6 +19,8 @@ import io.github.vvb2060.ims.privileged.ImsResetter
 import io.github.vvb2060.ims.privileged.ImsStatusReader
 import io.github.vvb2060.ims.privileged.ImsModifier
 import io.github.vvb2060.ims.privileged.SimReader
+import io.github.vvb2060.ims.privileged.NetworkModeModifier
+import io.github.vvb2060.ims.model.NetworkModeRules
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -42,6 +44,37 @@ class ShizukuProvider : ShizukuProvider() {
         private const val TAG = "ShizukuProvider"
         private const val INSTRUMENTATION_RESULT_TIMEOUT_MS = 10_000L
         private val instrumentationMutex = Mutex()
+
+        data class NetworkModeResult(
+            val allowedMask: Long? = null,
+            val errorMessage: String? = null,
+            val unsupported: Boolean = false,
+        ) {
+            val is5gAllowed: Boolean? get() = allowedMask?.let(NetworkModeRules::is5gAllowed)
+        }
+
+        suspend fun networkMode(
+            context: Context,
+            subId: Int,
+            slotIndex: Int,
+            toggle: Boolean = false,
+        ): NetworkModeResult {
+            val args = Bundle().apply {
+                putInt(NetworkModeModifier.SUB_ID, subId)
+                putInt(NetworkModeModifier.SLOT_INDEX, slotIndex)
+                putBoolean(NetworkModeModifier.TOGGLE, toggle)
+            }
+            val result = startInstrumentation(context, NetworkModeModifier::class.java, args, true)
+                ?: return NetworkModeResult(errorMessage = "No network mode result (start failed or timed out)")
+            val mask = result.rawValue(NetworkModeModifier.MASK) as? Long
+            if (!result.getBoolean(NetworkModeModifier.SUCCESS, false) || mask == null) {
+                return NetworkModeResult(
+                    errorMessage = result.getString(NetworkModeModifier.ERROR) ?: "Invalid network mode result",
+                    unsupported = result.getBoolean(NetworkModeModifier.UNSUPPORTED, false),
+                )
+            }
+            return NetworkModeResult(allowedMask = mask)
+        }
 
         data class CarrierConfigState(
             val config: Bundle?,

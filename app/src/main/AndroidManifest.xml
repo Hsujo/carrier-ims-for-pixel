@@ -98,6 +98,29 @@
             </intent-filter>
         </service>
 
+        <service
+            android:name="io.github.vvb2060.ims.tiles.SIM1NetworkModeTileService"
+            android:exported="true"
+            android:label="@string/qs_network_title_sim_1"
+            android:icon="@drawable/ic_qs_network_mode"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+        <service
+            android:name="io.github.vvb2060.ims.tiles.SIM2NetworkModeTileService"
+            android:exported="true"
+            android:label="@string/qs_network_title_sim_2"
+            android:icon="@drawable/ic_qs_network_mode"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+
         <provider
             android:name="io.github.vvb2060.ims.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
@@ -142,5 +165,9 @@
     <instrumentation
         android:name="io.github.vvb2060.ims.privileged.ApnModifier"
         android:label="ApnModifier"
+        android:targetPackage="${applicationId}" />
+    <instrumentation
+        android:name="io.github.vvb2060.ims.privileged.NetworkModeModifier"
+        android:label="SIM network mode"
         android:targetPackage="${applicationId}" />
 </manifest>

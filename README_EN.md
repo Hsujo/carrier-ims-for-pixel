@@ -153,3 +153,11 @@ This app modifies carrier-related system configuration for learning, testing, an
 ## License
 
 Apache-2.0
+
+## 4G/5G Quick Settings tiles
+
+Authorize Shizuku, edit Quick Settings, and add **4G/5G (SIM 1)** or **4G/5G (SIM 2)**. Tap to toggle NR in that subscription’s user network preference; unlock the device when prompted. An active tile means **5G allowed**, not an active 5G connection. Disabling NR preserves LTE and all other preference bits, so this does not force LTE-only mode.
+
+The operation reads back the preference after writing. Missing SIMs, unavailable Shizuku, unsupported modems and read failures make the tile unavailable. Errors show a message and refresh the actual preference. Empty preferences and disabling NR as the only allowed network are rejected. SIM numbers follow Android logical slots and do not change the default data SIM.
+
+Carrier NR availability / NSA / SA settings are separate. Carrier, power and coverage restrictions still apply; the tile reports only the user preference.

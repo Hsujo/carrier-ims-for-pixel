@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <!-- Only English and Simplified Chinese are packaged by app/build.gradle.kts. -->
+    <string name="qs_network_title_sim_1">4G/5G (SIM 1)</string>
+    <string name="qs_network_title_sim_2">4G/5G (SIM 2)</string>
+    <string name="qs_network_5g_allowed">5G allowed</string>
+    <string name="qs_network_5g_disabled">5G disabled</string>
+    <string name="qs_network_no_sim">No active SIM</string>
+    <string name="qs_network_needs_shizuku">Shizuku authorization required</string>
+    <string name="qs_network_unsupported">5G not supported</string>
+    <string name="qs_network_read_failed">Cannot read network preference</string>
+    <string name="qs_network_switching">Switching…</string>
+    <string name="qs_network_switch_failed">Could not confirm network mode switch. Check the tile state and logs.</string>
+</resources>

@@ -1,5 +1,8 @@
 ## Unreleased
 
+### 新增
+- 新增 SIM1 / SIM2 的 4G/5G 快捷设置磁贴：按卡切换用户网络偏好的 NR 位，保留其他网络类型；切换后读回验证，并显示 Shizuku、无卡、不支持与读取失败状态
+
 ### 恢复
 - 合并此前未进入 master 的 5G 开发线（`claude/5g-default-location-nsa-sa-x6yl6h`，25 个提交）：
   - NR 模式：附加功能页可选 NSA / NSA+SA / SA（默认 NSA+SA），显示实际读回的 `carrier_nr_availabilities_int_array`，可随时重新读取
